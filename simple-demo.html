@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Simple WebGL Demo</title>
+  <style>
+    body { margin: 0; background: #000; display: flex; justify-content: center; align-items: center; height: 100vh; }
+    canvas { border: 3px solid #0f0; }
+  </style>
+</head>
+<body>
+  <canvas id="c" width="400" height="400"></canvas>
+  <script>
+    const canvas = document.getElementById('c');
+    const gl = canvas.getContext('webgl2');
+    
+    if (!gl) {
+      alert('WebGL2 not supported');
+    }
+    
+    // Simple vertex shader
+    const vs = `#version 300 es
+    in vec3 p;
+    void main() {
+      gl_Position = vec4(p, 1.0);
+    }`;
+    
+    // Simple fragment shader
+    const fs = `#version 300 es
+    precision highp float;
+    out vec4 c;
+    void main() {
+      c = vec4(1.0, 0.0, 0.0, 1.0);
+    }`;
+    
+    // Compile shaders
+    function compile(type, src) {
+      const s = gl.createShader(type);
+      gl.shaderSource(s, src);
+      gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+        console.error('Shader error:', gl.getShaderInfoLog(s));
+        return null;
+      }
+      return s;
+    }
+    
+    const v = compile(gl.VERTEX_SHADER, vs);
+    const f = compile(gl.FRAGMENT_SHADER, fs);
+    
+    // Link program
+    const prog = gl.createProgram();
+    gl.attachShader(prog, v);
+    gl.attachShader(prog, f);
+    gl.linkProgram(prog);
+    
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+      console.error('Program error:', gl.getProgramInfoLog(prog));
+    }
+    
+    gl.useProgram(prog);
+    
+    // Create a triangle
+    const verts = new Float32Array([
+      0, 0.5, 0,
+      -0.5, -0.5, 0,
+      0.5, -0.5, 0
+    ]);
+    
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
+    
+    const pLoc = gl.getAttribLocation(prog, 'p');
+    gl.enableVertexAttribArray(pLoc);
+    gl.vertexAttribPointer(pLoc, 3, gl.FLOAT, false, 0, 0);
+    
+    // Draw
+    gl.clearColor(0.1, 0.1, 0.1, 1.0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    
+    console.log('Drew triangle successfully!');
+  </script>
+</body>
+</html>

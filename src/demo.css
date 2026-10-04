@@ -1,0 +1,17 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Courier New', monospace; background: #1a1a2e; color: #eee; display: flex; height: 100vh; }
+#canvas-container { flex: 1; display: flex; align-items: center; justify-content: center; padding: 20px; }
+canvas#glcanvas { border: 2px solid #0f3460; border-radius: 8px; background: #000; touch-action: none; cursor: grab; }
+#info-panel { width: 450px; padding: 20px; background: #16213e; overflow-y: auto; border-left: 2px solid #0f3460; }
+h1 { color: #e94560; margin-bottom: 10px; font-size: 1.5em; }
+h2 { color: #8ab4f8; margin: 15px 0 10px; font-size: 1.1em; }
+.subtitle { color: #aaa; margin-bottom: 20px; font-size: 0.9em; }
+.code-block { background: #0a0a0a; padding: 15px; border-radius: 5px; margin: 10px 0; font-size: 0.75em; line-height: 1.5; white-space: pre-wrap; border: 1px solid #333; }
+.highlight { background: #2a2a4a; padding: 10px; border-radius: 5px; margin: 10px 0; border-left: 3px solid #e94560; font-size: 0.9em; line-height: 1.5; }
+.nav-link { display: inline-block; margin: 10px 10px 10px 0; padding: 8px 15px; background: #0f3460; color: #eee; text-decoration: none; border-radius: 5px; font-size: 0.9em; }
+.nav-link:hover { background: #e94560; }
+.controls { background: #0f3460; padding: 12px; border-radius: 5px; margin: 10px 0; display: grid; gap: 8px; font-size: 0.85em; }
+.controls label { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.controls input[type=range] { flex: 1; }
+.controls select { background: #0a0a0a; color: #eee; border: 1px solid #333; padding: 3px; font-family: inherit; }
+#uv-canvas { width: 100%; max-width: 256px; border: 1px solid #333; border-radius: 4px; background: #000; display: block; }

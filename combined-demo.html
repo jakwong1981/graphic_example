@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Combined Shader Demo</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Courier New', monospace;
+      background: #1a1a2e;
+      color: #eee;
+      display: flex;
+      height: 100vh;
+    }
+    #canvas-container {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    canvas {
+      border: 2px solid #0f3460;
+      border-radius: 8px;
+      background: #000;
+    }
+    #info-panel {
+      width: 400px;
+      padding: 20px;
+      background: #16213e;
+      overflow-y: auto;
+      border-left: 2px solid #0f3460;
+    }
+    h1 { color: #e94560; margin-bottom: 20px; font-size: 1.5em; }
+    h2 { color: #0f3460; margin: 15px 0 10px; font-size: 1.2em; }
+    .code-block {
+      background: #0a0a0a;
+      padding: 15px;
+      border-radius: 5px;
+      margin: 10px 0;
+      font-size: 0.85em;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      border: 1px solid #333;
+    }
+    .matrix-display {
+      background: #0f3460;
+      padding: 10px;
+      border-radius: 5px;
+      margin: 10px 0;
+      font-size: 0.9em;
+    }
+    .comment { color: #6a9955; }
+    .keyword { color: #569cd6; }
+    .type { color: #4ec9b0; }
+    .number { color: #b5cea8; }
+  </style>
+</head>
+<body>
+  <div id="canvas-container">
+    <canvas id="glcanvas" width="600" height="600"></canvas>
+  </div>
+  <div id="info-panel">
+    <a href="./" style="color:#aaa">&larr; Home</a>
+    <h1>Combined Shader Demo</h1>
+    <p>Rotating cube with vertex/fragment shaders</p>
+    
+    <h2>Vertex Shader</h2>
+    <div class="code-block" id="vertex-shader-display"></div>
+    
+    <h2>Fragment Shader</h2>
+    <div class="code-block" id="fragment-shader-display"></div>
+    
+    <h2>Model Matrix</h2>
+    <div class="matrix-display" id="model-matrix"></div>
+    
+    <h2>View Matrix</h2>
+    <div class="matrix-display" id="view-matrix"></div>
+    
+    <h2>Projection Matrix</h2>
+    <div class="matrix-display" id="proj-matrix"></div>
+  </div>
+  
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

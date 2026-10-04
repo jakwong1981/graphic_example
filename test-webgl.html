@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>WebGL Test</title>
+  <style>
+    body { background: #000; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+    canvas { border: 2px solid #fff; }
+  </style>
+</head>
+<body>
+  <canvas id="test" width="400" height="400"></canvas>
+  <script>
+    const canvas = document.getElementById('test');
+    const gl = canvas.getContext('webgl2');
+    
+    if (!gl) {
+      document.body.innerHTML = '<h1 style="color: red; text-align: center;">WebGL2 NOT supported!</h1>';
+    } else {
+      // Clear with bright red to verify WebGL works
+      gl.clearColor(1.0, 0.0, 0.0, 1.0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      
+      const msg = document.createElement('div');
+      msg.style.cssText = 'color: #0f0; position: absolute; top: 20px; left: 20px; font-family: monospace;';
+      msg.textContent = '✓ WebGL2 is working! You should see a red canvas.';
+      document.body.appendChild(msg);
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fragment Shader Demo</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Courier New', monospace; background: #1a1a2e; color: #eee; display: flex; height: 100vh; }
+    #canvas-container { flex: 1; display: flex; align-items: center; justify-content: center; padding: 20px; }
+    canvas { border: 2px solid #0f3460; border-radius: 8px; background: #000; }
+    #info-panel { width: 450px; padding: 20px; background: #16213e; overflow-y: auto; border-left: 2px solid #0f3460; }
+    h1 { color: #e94560; margin-bottom: 10px; font-size: 1.5em; }
+    h2 { color: #0f3460; margin: 15px 0 10px; font-size: 1.2em; }
+    .subtitle { color: #aaa; margin-bottom: 20px; font-size: 0.9em; }
+    .code-block { background: #0a0a0a; padding: 15px; border-radius: 5px; margin: 10px 0; font-size: 0.75em; line-height: 1.5; white-space: pre-wrap; border: 1px solid #333; max-height: 300px; overflow-y: auto; }
+    .highlight { background: #2a2a4a; padding: 10px; border-radius: 5px; margin: 10px 0; border-left: 3px solid #e94560; }
+    .nav-link { display: inline-block; margin: 10px 0; padding: 8px 15px; background: #0f3460; color: #eee; text-decoration: none; border-radius: 5px; font-size: 0.9em; }
+    .nav-link:hover { background: #e94560; }
+  </style>
+</head>
+<body>
+  <div id="canvas-container">
+    <canvas id="glcanvas" width="600" height="600"></canvas>
+  </div>
+  <div id="info-panel">
+    <h1>🎨 Fragment Shader Demo</h1>
+    <p class="subtitle">Pixel Coloring & Phong Lighting</p>
+    <a href="./" class="nav-link">&larr; Home</a>
+    <a href="vertex-demo.html" class="nav-link">→ See Vertex Shader Demo</a>
+    <div class="highlight">
+      <strong>What You're Seeing:</strong><br>
+      • Full Phong lighting (ambient + diffuse + specular)<br>
+      • Shiny highlights that move with rotation<br>
+      • Smooth shading across faces<br>
+      • Fragment shader calculates each pixel
+    </div>
+    <h2>Fragment Shader Role</h2>
+    <div class="highlight">
+      • Calculates final pixel color<br>
+      • Runs ONCE per pixel (thousands/frame)<br>
+      • Applies lighting model<br>
+      • Creates shadows & highlights
+    </div>
+    <h2>Theory: Rasterization</h2>
+    <div class="highlight">
+      After the vertex stage, each triangle is converted to pixels. Every covered pixel gets interpolated vNormal, vWorldPos and vColor (barycentric weights), and the fragment shader runs once for it.
+    </div>
+    <h2>Theory: Phong / Blinn-Phong</h2>
+    <div class="code-block">color = (ambient + diffuse + specular) · baseColor
+
+ambient  = 0.3
+N = normalize(vNormal)
+L = normalize(lightPos - worldPos)
+V = normalize(viewPos  - worldPos)
+H = normalize(L + V)             (half vector)
+
+diffuse  = max(N·L, 0)           (Lambert's cosine law)
+specular = 0.5 · max(N·H, 0)^32  (shininess = 32)</div>
+    <h2>Theory: Reading the Terms</h2>
+    <div class="highlight">
+      • Ambient: constant floor so shadowed faces are not black<br>
+      • Diffuse: brightest when the surface faces the light (N·L = 1), zero at 90° or more<br>
+      • Specular: sharp highlight when H aligns with N; higher exponent = smaller, tighter spot<br>
+      • Because it runs per pixel, highlights move smoothly as the cube rotates
+    </div>
+    <h2>Theory: Vertex vs Fragment Cost</h2>
+    <div class="highlight">
+      A cube has 24 vertices but covers thousands of pixels. Per-pixel lighting (this demo) is more accurate than per-vertex lighting (Gouraud) but costs more per frame.
+    </div>
+  </div>
+  <script type="module" src="/src/main-fragment-demo.ts"></script>
+</body>
+</html>

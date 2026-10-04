@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Donut Texture Demo B - Procedural Textures</title>
+  <link rel="stylesheet" href="/src/demo.css">
+</head>
+<body>
+  <div id="canvas-container">
+    <canvas id="glcanvas" width="600" height="600"></canvas>
+  </div>
+  <div id="info-panel">
+    <h1>🍩 Donut B: Procedural Textures</h1>
+    <p class="subtitle">No image files: every color is computed per pixel</p>
+    <a href="./" class="nav-link">&larr; Home</a>
+    <a href="donut-uv-demo.html" class="nav-link">&rarr; Demo A: UV Images</a>
+
+    <h2>Controls</h2>
+    <div class="controls">
+      <label><span>View</span>
+        <select id="mode">
+          <option value="0">Final</option>
+          <option value="1">Dough only</option>
+          <option value="2">Icing mask</option>
+          <option value="3">fbm noise</option>
+          <option value="4">Chocolate mask</option>
+        </select>
+      </label>
+      <label><span>Icing thickness <span id="thickness-value">0.030</span></span><input type="range" id="thickness" min="0" max="0.08" step="0.005" value="0.03"></label>
+      <label><span>Light angle</span><input type="range" id="light" min="0" max="360" value="40"></label>
+    </div>
+    <div class="highlight">Pick a single view to take the texture apart: noise &rarr; masks &rarr; final color. Drag to rotate, wheel to zoom.</div>
+
+    <h2>Theory: Value Noise</h2>
+    <div class="code-block">hash(p)  -> pseudo-random number in [0,1) per lattice point
+noise(p) -> trilinear blend of the 8 surrounding hashes
+            with smooth weights s = f&middot;f&middot;(3 - 2f)
+
+Sampled at the 3D surface point, not at UV, so the texture
+has no seam where u wraps from 1 back to 0.</div>
+
+    <h2>Theory: fbm (fractal noise)</h2>
+    <div class="code-block">fbm(p) = &Sigma; amp_i &middot; noise(2^i &middot; p),   amp_i = 0.5^(i+1)
+
+Each octave doubles the frequency and halves the strength.
+Used for dough speckles, icing tint and bump height.</div>
+
+    <h2>Theory: Icing Mask &amp; Drips</h2>
+    <div class="code-block">g(u)    = 0.5 + 0.25&middot;sin(2&pi;&middot;3u) + 0.15&middot;sin(2&pi;&middot;7u+1.3)
+              + 0.1&middot;sin(2&pi;&middot;13u+4)
+edge(u) = 0.35 - 0.7&middot;g(u)
+mask    = smoothstep(edge-0.03, edge+0.03, sin(2&pi;v))
+
+sin(2&pi;v) is the height on the tube (1 = top). Integer sine
+frequencies keep the edge periodic in u. Where edge is low the
+icing drips further down the side.</div>
+
+    <h2>Theory: Layers &amp; Sprinkles</h2>
+    <div class="code-block">albedo = mix(dough, icing, mask)
+albedo = mix(albedo, chocolate, stripe &middot; mask)
+
+Sprinkles: split UV into a 60x24 grid, hash each cell,
+10% of cells get a rotated capsule with a hashed color.
+Chocolate: stripe = smoothstep(0.8,0.88, 0.5+0.5&middot;sin(2&pi;w))
+           w = 14u + 1.5&middot;sin(4&pi;v) + 1.2&middot;fbm(p)</div>
+
+    <h2>Theory: Displacement (vertex shader)</h2>
+    <div class="code-block">P' = P + N &middot; thickness &middot; mask &middot; (0.6 + 0.4&middot;fbm)
+
+Icing physically sits above the dough. The normal is left
+unchanged for simplicity, so the bump shading below
+supplies the detail.</div>
+
+    <h2>Theory: Bump Mapping</h2>
+    <div class="code-block">Height h(p) comes from noise. Its screen-space slope:
+dh/dx = dFdx(h),  dh/dy = dFdy(h)
+
+N' = normalize( |det|&middot;N - sign(det)&middot;(dh/dx&middot;r1 + dh/dy&middot;r2) )
+r1 = cross(dFdy(P), N),  r2 = cross(N, dFdx(P))
+
+Derivatives replace a stored normal map or tangents.</div>
+  </div>
+  <script type="module" src="/src/main-donut-procedural-demo.ts"></script>
+</body>
+</html>

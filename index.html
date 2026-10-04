@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Computer Graphics Demos</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Courier New', monospace; background: #1a1a2e; color: #eee; min-height: 100vh; padding: 40px 20px; }
+    main { max-width: 900px; margin: 0 auto; }
+    h1 { color: #e94560; font-size: 2em; margin-bottom: 8px; }
+    .subtitle { color: #aaa; margin-bottom: 30px; }
+    h2 { color: #e94560; font-size: 1.1em; margin: 25px 0 12px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
+    .card { display: block; padding: 20px; background: #16213e; border: 2px solid #0f3460; border-radius: 8px; color: #eee; text-decoration: none; transition: border-color .15s, transform .15s; }
+    .card:hover { border-color: #e94560; transform: translateY(-2px); }
+    .card h3 { font-size: 1.1em; margin-bottom: 8px; }
+    .card p { color: #aaa; font-size: 0.85em; line-height: 1.5; }
+    .tag { display: inline-block; margin-top: 12px; padding: 2px 8px; background: #0f3460; border-radius: 4px; font-size: 0.75em; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Computer Graphics Demos</h1>
+    <p class="subtitle">Interactive WebGL2 examples showing the principles and calculations behind rendering.</p>
+
+    <h2>Example 1: GL Shaders</h2>
+    <div class="grid">
+      <a class="card" href="vertex-demo.html">
+        <h3>Vertex Shader</h3>
+        <p>Model &rarr; World &rarr; View &rarr; Clip transforms, rotation and projection matrices. Flat colors, no lighting.</p>
+        <span class="tag">geometry</span>
+      </a>
+      <a class="card" href="fragment-demo.html">
+        <h3>Fragment Shader</h3>
+        <p>Per-pixel Blinn-Phong lighting: ambient, diffuse and specular terms.</p>
+        <span class="tag">lighting</span>
+      </a>
+      <a class="card" href="combined-demo.html">
+        <h3>Combined Demo</h3>
+        <p>Both shaders together with live source code and matrix values.</p>
+        <span class="tag">full pipeline</span>
+      </a>
+    </div>
+
+    <h2>Example 2: Donut 3D Textures</h2>
+    <div class="grid">
+      <a class="card" href="donut-uv-demo.html">
+        <h3>A: UV Image Textures</h3>
+        <p>Dough, icing and chocolate layers sampled through UVs. Filtering, mipmaps, tiling, alpha layering and normal mapping.</p>
+        <span class="tag">texture2D</span>
+      </a>
+      <a class="card" href="donut-procedural-demo.html">
+        <h3>B: Procedural Textures</h3>
+        <p>The same donut textured by noise, fbm and masks computed in the shader, with displacement and bump mapping.</p>
+        <span class="tag">noise</span>
+      </a>
+    </div>
+  </main>
+</body>
+</html>

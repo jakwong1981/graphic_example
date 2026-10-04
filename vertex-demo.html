@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vertex Shader Demo</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Courier New', monospace; background: #1a1a2e; color: #eee; display: flex; height: 100vh; }
+    #canvas-container { flex: 1; display: flex; align-items: center; justify-content: center; padding: 20px; }
+    canvas { border: 2px solid #0f3460; border-radius: 8px; background: #000; }
+    #info-panel { width: 450px; padding: 20px; background: #16213e; overflow-y: auto; border-left: 2px solid #0f3460; }
+    h1 { color: #e94560; margin-bottom: 10px; font-size: 1.5em; }
+    h2 { color: #0f3460; margin: 15px 0 10px; font-size: 1.2em; }
+    .subtitle { color: #aaa; margin-bottom: 20px; font-size: 0.9em; }
+    .code-block { background: #0a0a0a; padding: 15px; border-radius: 5px; margin: 10px 0; font-size: 0.75em; line-height: 1.5; white-space: pre-wrap; border: 1px solid #333; max-height: 300px; overflow-y: auto; }
+    .highlight { background: #2a2a4a; padding: 10px; border-radius: 5px; margin: 10px 0; border-left: 3px solid #e94560; }
+    .nav-link { display: inline-block; margin: 10px 0; padding: 8px 15px; background: #0f3460; color: #eee; text-decoration: none; border-radius: 5px; font-size: 0.9em; }
+    .nav-link:hover { background: #e94560; }
+  </style>
+</head>
+<body>
+  <div id="canvas-container">
+    <canvas id="glcanvas" width="600" height="600"></canvas>
+  </div>
+  <div id="info-panel">
+    <h1>🔺 Vertex Shader Demo</h1>
+    <p class="subtitle">Geometry Transformation Only - No Lighting</p>
+    <a href="./" class="nav-link">&larr; Home</a>
+    <a href="fragment-demo.html" class="nav-link">→ See Fragment Shader Demo</a>
+    <div class="highlight">
+      <strong>What You're Seeing:</strong><br>
+      • Flat colors (NO lighting calculations)<br>
+      • Pure geometry transformation<br>
+      • Vertex shader transforms each vertex<br>
+      • Fragment shader just outputs vertex color
+    </div>
+    <h2>Vertex Shader Role</h2>
+    <div class="highlight">
+      • Transforms 3D → 2D screen positions<br>
+      • Runs ONCE per vertex (24 times/frame)<br>
+      • Handles rotation & positioning<br>
+      • Passes color to fragment shader
+    </div>
+    <h2>Theory: Coordinate Pipeline</h2>
+    <div class="code-block">Model → World → View → Clip → NDC → Screen
+
+world = M · v_model        (rotate/scale/translate)
+view  = V · world          (inverse of camera pose)
+clip  = P · view           (perspective projection)
+NDC   = clip.xyz / clip.w  (perspective divide, done by GPU)
+screen.x = (NDC.x + 1)/2 · width
+screen.y = (NDC.y + 1)/2 · height</div>
+    <h2>Theory: Rotation Matrix (Y axis)</h2>
+    <div class="code-block">| cosθ   0   sinθ   0 |
+|  0     1    0     0 |
+| -sinθ  0   cosθ   0 |
+|  0     0    0     1 |
+
+x' =  x·cosθ + z·sinθ
+z' = -x·sinθ + z·cosθ</div>
+    <h2>Theory: Perspective Projection</h2>
+    <div class="code-block">f = 1 / tan(fov / 2)
+
+| f/aspect 0   0                 0               |
+| 0        f   0                 0               |
+| 0        0   (far+near)/(near-far)  2·far·near/(near-far) |
+| 0        0   -1                0               |
+
+clip.w = -z_view, so distant points shrink after dividing by w.</div>
+    <h2>Theory: Normal Matrix</h2>
+    <div class="code-block">N = transpose(inverse(mat3(M)))
+
+Normals are not transformed by M directly; non-uniform
+scale would skew them off perpendicular. Output is
+normalized and sent to the fragment shader.</div>
+    <h2>Theory: Varyings</h2>
+    <div class="highlight">
+      vColor, vNormal and vWorldPos are written per vertex, then the rasterizer interpolates them across each triangle using barycentric coordinates: v = a·v0 + b·v1 + c·v2 (a+b+c=1).
+    </div>
+  </div>
+  <script type="module" src="/src/main-vertex-demo.ts"></script>
+</body>
+</html>
