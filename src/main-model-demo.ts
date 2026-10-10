@@ -8,6 +8,9 @@ import { createTexture } from './webgl/texture';
 import { createOrbitCamera } from './webgl/orbit-camera';
 import { perspective } from './math/matrix';
 import { loadGlb } from './loaders/glb';
+import { drawAtlas } from './models/atlas';
+import { kmbBus } from './models/kmb-bus';
+import { ModelDef } from './models/types';
 
 const MODEL_URL = './icecream-van.glb';
 
@@ -35,30 +38,80 @@ let texture: WebGLTexture | null = null;
 let baseColorFactor: [number, number, number, number] = [1, 1, 1, 1];
 let fit = { scale: 1, center: [0, 0, 0] as [number, number, number] };
 
-loadGlb(MODEL_URL, (loaded, total) => {
-  const mb = (n: number) => (n / 1048576).toFixed(1);
-  status.textContent = total ? `Loading ${mb(loaded)} / ${mb(total)} MB` : `Loading ${mb(loaded)} MB`;
-})
-  .then((model) => {
-    mesh = createMesh(glCtx, program, model);
-    if (model.baseColorImage) texture = createTexture(glCtx, model.baseColorImage);
-    baseColorFactor = model.baseColorFactor;
-    // Center the bounding box at the origin and scale its largest side to 2 units
-    const size = model.max.map((v, i) => v - model.min[i]);
-    fit = {
-      scale: 2 / Math.max(...size),
-      center: [0, 1, 2].map((i) => (model.min[i] + model.max[i]) / 2) as [number, number, number],
-    };
-    status.textContent = 'Loaded';
-    stats.textContent =
-      `${model.vertexCount.toLocaleString()} vertices, ${model.triangleCount.toLocaleString()} triangles, ` +
-      `${model.indices instanceof Uint32Array ? '32' : '16'}-bit indices, ` +
-      (model.baseColorImage ? `${model.baseColorImage.width}x${model.baseColorImage.height} texture` : 'no texture');
+const modelSelect = $<HTMLSelectElement>('model-select');
+const atlasCanvas = $<HTMLCanvasElement>('atlas-canvas');
+const atlasSection = $('atlas-section');
+let loadId = 0; // ignore a slow GLB load that finishes after the user switched models
+
+// Center the bounding box at the origin and scale its largest side to 2 units
+function fitTo(min: ArrayLike<number>, max: ArrayLike<number>) {
+  const size = [0, 1, 2].map((i) => max[i] - min[i]);
+  fit = {
+    scale: 2 / Math.max(...size),
+    center: [0, 1, 2].map((i) => (min[i] + max[i]) / 2) as [number, number, number],
+  };
+}
+
+function replace(newMesh: Mesh, newTexture: WebGLTexture | null) {
+  mesh?.dispose();
+  if (texture) glCtx.deleteTexture(texture);
+  mesh = newMesh;
+  texture = newTexture;
+}
+
+function showGlb() {
+  const id = ++loadId;
+  atlasSection.hidden = true;
+  status.textContent = 'Loading...';
+  stats.textContent = '';
+  loadGlb(MODEL_URL, (loaded, total) => {
+    if (id !== loadId) return;
+    const mb = (n: number) => (n / 1048576).toFixed(1);
+    status.textContent = total ? `Loading ${mb(loaded)} / ${mb(total)} MB` : `Loading ${mb(loaded)} MB`;
   })
-  .catch((err: Error) => {
-    status.textContent = `Error: ${err.message}`;
-    console.error(err);
-  });
+    .then((model) => {
+      if (id !== loadId) return;
+      glCtx.pixelStorei(glCtx.UNPACK_FLIP_Y_WEBGL, false);
+      replace(createMesh(glCtx, program, model), model.baseColorImage ? createTexture(glCtx, model.baseColorImage) : null);
+      baseColorFactor = model.baseColorFactor;
+      fitTo(model.min, model.max);
+      status.textContent = 'Loaded icecream-van.glb';
+      stats.textContent =
+        `${model.vertexCount.toLocaleString()} vertices, ${model.triangleCount.toLocaleString()} triangles, ` +
+        `${model.indices instanceof Uint32Array ? '32' : '16'}-bit indices, ` +
+        (model.baseColorImage ? `${model.baseColorImage.width}x${model.baseColorImage.height} texture` : 'no texture');
+    })
+    .catch((err: Error) => {
+      status.textContent = `Error: ${err.message}`;
+      console.error(err);
+    });
+}
+
+// Procedural model with a painted UV atlas (same pipeline as the UV model demo)
+function showAtlasModel(def: ModelDef) {
+  ++loadId;
+  const data = def.build();
+  const atlas = document.createElement('canvas');
+  drawAtlas(atlas, def.regions, def.painters, def.paint, 'painted');
+  glCtx.pixelStorei(glCtx.UNPACK_FLIP_Y_WEBGL, false); // UV t = 0 is the top row
+  const tex = createTexture(glCtx, atlas);
+  glCtx.texParameteri(glCtx.TEXTURE_2D, glCtx.TEXTURE_WRAP_S, glCtx.CLAMP_TO_EDGE);
+  glCtx.texParameteri(glCtx.TEXTURE_2D, glCtx.TEXTURE_WRAP_T, glCtx.CLAMP_TO_EDGE);
+  replace(createMesh(glCtx, program, data), tex);
+  baseColorFactor = [1, 1, 1, 1];
+  fitTo(data.min, data.max);
+  status.textContent = `${def.label} (built in code)`;
+  stats.textContent = `${(data.indices.length / 3).toLocaleString()} triangles, ${Object.keys(def.regions).length} UV atlas regions, 1024x1024 texture`;
+  atlasSection.hidden = false;
+  atlasCanvas.getContext('2d')!.drawImage(atlas, 0, 0, atlasCanvas.width, atlasCanvas.height);
+}
+
+function selectModel() {
+  if (modelSelect.value === 'glb') showGlb();
+  else showAtlasModel(kmbBus);
+}
+modelSelect.addEventListener('change', selectModel);
+selectModel();
 
 glCtx.enable(glCtx.DEPTH_TEST);
 glCtx.disable(glCtx.CULL_FACE); // material is double-sided

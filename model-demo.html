@@ -11,13 +11,19 @@
     <canvas id="glcanvas" width="600" height="600"></canvas>
   </div>
   <div id="info-panel">
-    <h1>🍦 Ice Cream Van: GLB Model</h1>
+    <h1>🍦🚌 Model Viewer: GLB + UV Models</h1>
     <p class="subtitle">Drag to rotate, wheel to zoom</p>
     <a href="./" class="nav-link">&larr; Home</a>
     <h2>Status</h2>
     <div class="highlight"><span id="status" role="status" aria-live="polite">Loading...</span><br><span id="stats"></span></div>
     <h2>Controls</h2>
     <div class="controls">
+      <label><span>Model</span>
+        <select id="model-select">
+          <option value="glb">Ice cream van (GLB file)</option>
+          <option value="bus">KMB double-decker bus (UV atlas)</option>
+        </select>
+      </label>
       <label><span>View</span>
         <select id="view-mode">
           <option value="0">Lit</option>
@@ -28,6 +34,11 @@
       </label>
       <label><span>Light angle</span><input type="range" id="light" min="0" max="360" value="40"></label>
       <label><span>Auto-rotate</span><input type="checkbox" id="auto-rotate" checked></label>
+    </div>
+    <div id="atlas-section" hidden>
+      <h2>UV Texture Atlas</h2>
+      <canvas id="atlas-canvas" width="320" height="320" aria-label="Bus UV texture atlas" style="width:100%;max-width:320px;height:auto;background:#111;border-radius:4px"></canvas>
+      <div class="highlight">Each face of the bus samples its own region of this one image: left and right sides (separate so "KMB" reads correctly), front with the LED destination "STAR FERRY 1A", back, roof, tyre tread and hubcaps.</div>
     </div>
     <h2>Theory: GLB Layout</h2>
     <div class="code-block">Header (12 bytes): magic "glTF" | version 2 | total length
