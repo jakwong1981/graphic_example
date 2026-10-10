@@ -5,6 +5,7 @@ import { Mat4, lookAt } from '../math/matrix';
 export interface OrbitCamera {
   view(): Mat4;
   position(): [number, number, number];
+  setDistance(distance: number): void;
 }
 
 export function createOrbitCamera(canvas: HTMLCanvasElement, distance = 3): OrbitCamera {
@@ -27,7 +28,7 @@ export function createOrbitCamera(canvas: HTMLCanvasElement, distance = 3): Orbi
     'wheel',
     (e) => {
       e.preventDefault();
-      dist = Math.max(1.5, Math.min(8, dist * Math.exp(e.deltaY * 0.001)));
+      dist = Math.max(1.5, Math.min(10, dist * Math.exp(e.deltaY * 0.001)));
     },
     { passive: false }
   );
@@ -41,5 +42,6 @@ export function createOrbitCamera(canvas: HTMLCanvasElement, distance = 3): Orbi
   return {
     view: () => lookAt(position(), [0, 0, 0], [0, 1, 0]),
     position,
+    setDistance: (d) => (dist = d),
   };
 }

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>飛行模擬器 Flight Simulator - Victoria Harbour</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-family: -apple-system, "PingFang HK", "Noto Sans TC", sans-serif; color: #e8f0ff; }
+    #glcanvas { display: block; width: 100vw; height: 100vh; }
+    .panel { position: absolute; background: rgba(8, 14, 28, 0.62); border: 1px solid rgba(140, 180, 255, 0.25); border-radius: 8px; padding: 10px 14px; backdrop-filter: blur(4px); }
+    #hud { top: 12px; left: 12px; font-variant-numeric: tabular-nums; min-width: 210px; }
+    #hud div { display: flex; justify-content: space-between; gap: 16px; line-height: 1.55; }
+    #hud b { color: #7fd1ff; font-weight: 600; }
+    #throttle-bar { height: 6px; background: rgba(255,255,255,0.15); border-radius: 3px; margin-top: 4px; overflow: hidden; }
+    #throttle-fill { height: 100%; width: 50%; background: linear-gradient(90deg, #4ad66d, #ffb02e 80%, #ff4b2e); }
+    #weather { top: 12px; right: 12px; display: flex; flex-direction: column; gap: 8px; }
+    #weather .row { display: flex; gap: 6px; }
+    #weather button { background: rgba(255,255,255,0.08); color: inherit; border: 1px solid rgba(255,255,255,0.25); border-radius: 6px; padding: 6px 10px; cursor: pointer; font-size: 14px; }
+    #weather button[aria-pressed="true"] { background: #2f6fd6; border-color: #7fb0ff; }
+    #music { bottom: 12px; right: 12px; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+    #music .row { display: flex; gap: 8px; align-items: center; }
+    #music button { background: rgba(255,255,255,0.08); color: inherit; border: 1px solid rgba(255,255,255,0.25); border-radius: 6px; padding: 6px 10px; cursor: pointer; }
+    #music button[aria-pressed="true"] { background: #2f6fd6; border-color: #7fb0ff; }
+    #help { bottom: 12px; left: 12px; font-size: 13px; line-height: 1.6; }
+    kbd { background: rgba(255,255,255,0.15); border-radius: 4px; padding: 0 5px; font-family: inherit; }
+    #warn { top: 38%; left: 50%; transform: translateX(-50%); font-size: 30px; font-weight: 700; letter-spacing: 2px; color: #ff5040; text-shadow: 0 0 12px rgba(255,60,40,0.7); background: none; border: none; display: none; text-align: center; }
+    a { color: #7fd1ff; }
+  </style>
+</head>
+<body>
+  <canvas id="glcanvas" aria-label="Flight simulator view"></canvas>
+
+  <div id="hud" class="panel" role="status" aria-live="off">
+    <div><span>空速 Speed</span><b id="spd">0</b></div>
+    <div><span>高度 Altitude</span><b id="alt">0</b></div>
+    <div><span>爬升率 V/S</span><b id="vs">0</b></div>
+    <div><span>航向 Heading</span><b id="hdg">0</b></div>
+    <div><span>攻角 AoA</span><b id="aoa">0</b></div>
+    <div><span>G 力</span><b id="g">1.0</b></div>
+    <div><span>油門 Throttle</span><b id="thr">50%</b></div>
+    <div id="throttle-bar"><div id="throttle-fill"></div></div>
+  </div>
+
+  <div id="weather" class="panel">
+    <div>天氣 Weather</div>
+    <div class="row">
+      <button data-weather="sunny" aria-pressed="true">☀️ 晴天</button>
+      <button data-weather="cloudy" aria-pressed="false">☁️ 陰天</button>
+      <button data-weather="rain" aria-pressed="false">🌧️ 雨天</button>
+    </div>
+    <div class="row">
+      <button id="cam-btn">🎥 鏡頭 Camera (C)</button>
+      <button id="assist-btn" aria-pressed="true">🧭 飛行輔助 Assist (F)</button>
+    </div>
+    <div class="row">
+      <button id="mute-btn" aria-pressed="false">🔊 聲音 Sound (M)</button>
+    </div>
+    <a href="./">&larr; Home</a>
+  </div>
+
+  <div id="music" class="panel">
+    <div class="row">
+      <button id="music-btn" aria-pressed="false">🎵 背景音樂 Music (B)</button>
+      <label>音量 <input type="range" id="music-vol" min="0" max="100" value="35" aria-label="Music volume"></label>
+    </div>
+    <small id="music-state">按 B 或按鈕播放 (YouTube)</small>
+    <div id="yt-player"></div>
+  </div>
+
+  <div id="help" class="panel">
+    <kbd>↑</kbd> 爬升 Climb &nbsp; <kbd>↓</kbd> 下降 Descend &nbsp; <kbd>←</kbd> 左轉 Turn left &nbsp; <kbd>→</kbd> 右轉 Turn right<br>
+    <kbd>A</kbd> 加速 Throttle up (後燃器 afterburner &gt; 85%) &nbsp; <kbd>Z</kbd> 減速 + 減速板<br>
+    <kbd>Q</kbd> <kbd>E</kbd> 方向舵 Rudder &nbsp; <kbd>C</kbd> 鏡頭 &nbsp; <kbd>F</kbd> 輔助開關 (關 = 手動俯仰/傾側) &nbsp; <kbd>M</kbd> 靜音 &nbsp; <kbd>B</kbd> 背景音樂<br>
+    <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 天氣 &nbsp; <kbd>R</kbd> 重置 Reset &nbsp; <small>按任何鍵開始聲音 Press any key to enable sound</small>
+  </div>
+
+  <div id="warn" class="panel" role="alert"></div>
+
+  <script type="module" src="/src/main-flight-sim.ts"></script>
+</body>
+</html>

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Car Demo - Building a Model with a 2D UV Texture</title>
+  <link rel="stylesheet" href="/src/demo.css">
+  <style>
+    #atlas-canvas { width: 100%; max-width: 320px; height: auto; background: #111; border-radius: 4px; }
+    button { padding: 6px 12px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div id="canvas-container">
+    <canvas id="glcanvas" width="600" height="600" aria-label="3D model preview"></canvas>
+  </div>
+  <div id="info-panel">
+    <h1>🚗🏢🚢✈️ Models + 2D UV Texture</h1>
+    <p class="subtitle">Drag to rotate, wheel to zoom</p>
+    <a href="./" class="nav-link">&larr; Home</a>
+    <a href="model-demo.html" class="nav-link">&rarr; GLB viewer</a>
+    <h2>Controls</h2>
+    <div class="controls">
+      <label><span>Model</span><select id="model"></select></label>
+      <label><span>Paint color</span><input type="color" id="paint" value="#d62828"></label>
+      <label><span>Texture</span>
+        <select id="atlas-mode">
+          <option value="painted">Painted atlas</option>
+          <option value="checker">UV checker</option>
+        </select>
+      </label>
+      <label><span>View</span>
+        <select id="view-mode">
+          <option value="0">Lit</option>
+          <option value="1">Albedo</option>
+          <option value="2">Normals</option>
+          <option value="3">UVs</option>
+        </select>
+      </label>
+      <label><span>Show UV wireframe</span><input type="checkbox" id="show-wire" checked></label>
+      <label><span>Light angle</span><input type="range" id="light" min="0" max="360" value="40"></label>
+      <label><span>Auto-rotate</span><input type="checkbox" id="auto-rotate" checked></label>
+    </div>
+    <p><button id="export">Export .glb</button> <span id="stats"></span></p>
+    <h2>Texture Atlas (2D)</h2>
+    <canvas id="atlas-canvas" width="512" height="512" aria-label="Texture atlas with UV layout"></canvas>
+    <div class="highlight">One 1024&times;1024 image holds every face. The lines are the mesh triangles drawn at their UVs. Switch to UV checker: equal squares on the model mean no stretching, and the red corner marks (s,t) = (0,0) of each region.</div>
+    <h2>Theory: Building the Models</h2>
+    <div class="code-block">Every model is made from 3 primitives:
+box      6 quads, each face mapped to a region
+cylinder side wraps t once around, caps map a disc
+cone     cylinder with end radius 0
+car      body box + tapered cabin + 4 wheel cylinders
+building tower box + penthouse box
+ship     hull box + bow wedge + cabin, bridge, funnel
+airplane fuselage cylinder + nose/tail cones,
+         box wings, tail, fin + 2 engine cylinders
+Each face has its own 3 vertices, so normals are flat.</div>
+    <h2>Theory: UV Atlas Regions</h2>
+    <div class="code-block">uv = ( (x0 + s&middot;w) / 1024,  (y0 + t&middot;h) / 1024 )
+(s,t) in 0..1 inside the region, from the face position:
+side: s = (x + 1.2) / 2.4    t = (0.55 - y) / 0.4
+w/h of the region = width/height of the face in metres,
+so the texel density is the same everywhere.</div>
+    <h2>Theory: Mirroring &amp; Seams</h2>
+    <div class="code-block">Both sides use s from x, so they share one region
+(front stays front, text would read mirrored).
+Building: three walls share one facade region.
+Cylinders: t = segment / N wraps once around.
+The seam at t = 0 / 1 gets duplicate vertices.</div>
+  </div>
+  <script type="module" src="/src/main-car-uv-demo.ts"></script>
+</body>
+</html>

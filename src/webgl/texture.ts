@@ -2,7 +2,7 @@
 
 export type FilterMode = 'nearest' | 'linear' | 'mipmap';
 
-export function createTexture(gl: WebGL2RenderingContext, image: ImageData): WebGLTexture {
+export function createTexture(gl: WebGL2RenderingContext, image: TexImageSource): WebGLTexture {
   const texture = gl.createTexture();
   if (!texture) throw new Error('Failed to create texture');
   gl.bindTexture(gl.TEXTURE_2D, texture);

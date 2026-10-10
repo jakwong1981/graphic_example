@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Image to 3D Demo - 2D Picture to 3D Asset</title>
+  <link rel="stylesheet" href="/src/demo.css">
+  <style>
+    #canvas-container.dragover { outline: 3px dashed #7aa2ff; outline-offset: -6px; }
+    .previews { display: flex; gap: 8px; }
+    .previews canvas { width: 50%; height: auto; background: #111; border-radius: 4px; }
+    button { padding: 6px 12px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div id="canvas-container">
+    <canvas id="glcanvas" width="600" height="600" aria-label="3D relief preview"></canvas>
+  </div>
+  <div id="info-panel">
+    <h1>🖼️ Image &rarr; 3D Asset</h1>
+    <p class="subtitle">Drop an image on the view (or pick one). Drag to rotate, wheel to zoom</p>
+    <a href="./" class="nav-link">&larr; Home</a>
+    <a href="model-demo.html" class="nav-link">&rarr; GLB viewer</a>
+    <h2>Input</h2>
+    <div class="controls">
+      <label><span>Image</span><input type="file" id="image-file" accept="image/*"></label>
+      <label><span>Depth map (optional)</span><input type="file" id="depth-file" accept="image/*"></label>
+    </div>
+    <div class="highlight"><span id="status" role="status" aria-live="polite">Using a placeholder. Load a picture to start.</span></div>
+    <div class="previews">
+      <canvas id="color-preview" width="256" height="144" aria-label="Source image"></canvas>
+      <canvas id="depth-preview" width="256" height="144" aria-label="Depth map"></canvas>
+    </div>
+    <h2>Depth</h2>
+    <div class="controls">
+      <label><span>Saturation weight <span id="sat-value"></span></span><input type="range" id="sat" min="0" max="1" step="0.05" value="0.35"></label>
+      <label><span>Blur <span id="blur-value"></span></span><input type="range" id="blur" min="0" max="12" step="1" value="3"></label>
+      <label><span>Gamma <span id="gamma-value"></span></span><input type="range" id="gamma" min="0.3" max="3" step="0.1" value="1.2"></label>
+      <label><span>Invert depth</span><input type="checkbox" id="invert"></label>
+    </div>
+    <h2>Mesh</h2>
+    <div class="controls">
+      <label><span>Resolution <span id="res-value"></span></span><input type="range" id="res" min="32" max="512" step="16" value="256"></label>
+      <label><span>Depth scale <span id="scale-value"></span></span><input type="range" id="scale" min="0" max="1.5" step="0.05" value="0.5"></label>
+      <label><span>Tear edges <span id="tear-value"></span></span><input type="range" id="tear" min="0.02" max="1" step="0.02" value="1"></label>
+      <label><span>Solid back</span><input type="checkbox" id="solid"></label>
+      <label><span>View</span>
+        <select id="view-mode">
+          <option value="1">Albedo</option>
+          <option value="0">Lit</option>
+          <option value="2">Normals</option>
+          <option value="3">UVs</option>
+        </select>
+      </label>
+      <label><span>Light angle</span><input type="range" id="light" min="0" max="360" value="40"></label>
+    </div>
+    <p><button id="export">Export .glb</button> <span id="stats"></span></p>
+    <div class="highlight">Heuristic depth is a rough guess. For real results, make a depth map with an ML model (e.g. Depth Anything or MiDaS), white = near, and load it as the depth map.</div>
+    <h2>Theory: Image &rarr; Heightfield</h2>
+    <div class="code-block">grid vertex (i,j) &rarr; u = i/(W-1), v = j/(H-1)
+P = ( 2(u-0.5),  2(0.5-v)&middot;H/W,  depth(u,v)&middot;scale )
+The photo is the texture; depth only moves vertices in z.</div>
+    <h2>Theory: Heuristic Depth</h2>
+    <div class="code-block">lum = 0.299R + 0.587G + 0.114B
+sat = (max - min) / max
+d   = mix(lum, sat, w)      (bright/colorful = near)
+d   = blur(d), normalize to 0..1, then d^gamma</div>
+    <h2>Theory: Tearing</h2>
+    <div class="code-block">drop triangle if  max(d) - min(d) &gt; threshold
+A big depth jump is an object edge. Stretching a
+triangle across it smears the subject into the background,
+so tearing cuts it into separate layers.</div>
+  </div>
+  <script type="module" src="/src/main-image-to-3d-demo.ts"></script>
+</body>
+</html>
