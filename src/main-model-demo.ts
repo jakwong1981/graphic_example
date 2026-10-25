@@ -10,6 +10,7 @@ import { perspective } from './math/matrix';
 import { loadGlb } from './loaders/glb';
 import { drawAtlas } from './models/atlas';
 import { kmbBus } from './models/kmb-bus';
+import { hkTram } from './models/hk-tram';
 import { ModelDef } from './models/types';
 
 const MODEL_URL = './icecream-van.glb';
@@ -108,7 +109,7 @@ function showAtlasModel(def: ModelDef) {
 
 function selectModel() {
   if (modelSelect.value === 'glb') showGlb();
-  else showAtlasModel(kmbBus);
+  else showAtlasModel(modelSelect.value === 'tram' ? hkTram : kmbBus);
 }
 modelSelect.addEventListener('change', selectModel);
 selectModel();

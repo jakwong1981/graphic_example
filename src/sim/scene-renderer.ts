@@ -32,6 +32,7 @@ export interface Drawable {
   mesh: Mesh;
   texture: WebGLTexture;
   water?: boolean;
+  emissive?: boolean;
 }
 
 export interface FrameState {
@@ -160,7 +161,7 @@ export class SceneRenderer {
   draw(d: Drawable, model: Float32Array) {
     const gl = this.gl;
     this.uw.m4('uModel', model);
-    this.uw.i('uMaterial', d.water ? 1 : 0);
+    this.uw.i('uMaterial', d.water ? 1 : d.emissive ? 2 : 0);
     gl.bindTexture(gl.TEXTURE_2D, d.texture);
     d.mesh.draw();
   }
@@ -184,6 +185,27 @@ export class SceneRenderer {
     gl.blendFunc(gl.ONE, gl.ONE);
     up.i('uMode', 0);
     flame.draw();
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
+  }
+
+  // Falling sakura petals (alpha blended point sprites)
+  drawPetals(f: FrameState, petals: ParticlePool) {
+    const { gl, up } = this;
+    const w = f.weather;
+    gl.useProgram(this.particle);
+    up.m4('uView', f.cam.view);
+    up.m4('uProj', f.cam.proj);
+    up.v3('uCamPos', f.cam.pos);
+    up.f('uScale', f.height / (2 * Math.tan(f.cam.fov / 2)));
+    up.v3('uFogColor', w.fog);
+    up.f('uFogDensity', w.fogDensity);
+    up.v3('uLight', w.ambSky.map((a, i) => a + w.sunColor[i] * 0.6 + f.flash));
+    up.i('uMode', 2);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.depthMask(false);
+    petals.draw();
     gl.depthMask(true);
     gl.disable(gl.BLEND);
   }

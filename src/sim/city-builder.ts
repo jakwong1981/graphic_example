@@ -8,6 +8,10 @@ export const TILE: Record<MaterialName, [number, number]> = {
   glass: [8, 8], office: [8, 8], residential: [8, 12], residential2: [8, 12], landmark: [8, 8],
   roof: [20, 20], road: [120, 120], concrete: [10, 10], water: [40, 40], hill: [60, 60],
   container: [24, 8], crane: [10, 10],
+  tonglau: [4, 3.5], shopfront: [4, 4.5], pawn: [3.4, 3.6], paving: [2, 2], asphalt: [8, 8], trackbed: [2, 2],
+  steel: [1, 1], yellow: [1, 1], white: [1, 1], bark: [1, 2], blossom: [3, 3], polegreen: [1, 2], boc: [12, 12],
+  signs: [1, 1], // explicit atlas UVs
+  grass: [2, 2],
 };
 
 export interface Box3 { min: V3; max: V3 }
@@ -43,6 +47,17 @@ export class CityBuilder {
       B.n.push(n[0] / l, n[1] / l, n[2] / l);
       B.uv.push(...t);
       B.c.push(...tint);
+    }
+  }
+
+  // Smooth triangle: caller gives counter-clockwise winding (seen from outside), per-vertex normals and tints
+  triN(m: MaterialName, p: [V3, V3, V3], n: [V3, V3, V3], t: [UV, UV, UV], tint: [V3, V3, V3]) {
+    const B = this.batch(m);
+    for (let i = 0; i < 3; i++) {
+      B.p.push(...p[i]);
+      B.n.push(...n[i]);
+      B.uv.push(...t[i]);
+      B.c.push(...tint[i]);
     }
   }
 
@@ -85,6 +100,14 @@ export class CityBuilder {
       const e = r * (taper < 1 ? (1 + taper) / 2 : 1) * 0.9; // conservative-ish bounding box
       this.colliders.push({ min: [cx - e, y0, cz - e], max: [cx + e, y1, cz + e] });
     }
+  }
+
+  // Arbitrary footprint (any convex polygon in x/z) extruded from y0 to y1
+  extrude(base: [number, number][], y0: number, y1: number, side: MaterialName, top: MaterialName | null) {
+    const cx = base.reduce((s, p) => s + p[0], 0) / base.length;
+    const cz = base.reduce((s, p) => s + p[1], 0) / base.length;
+    this.walls(base, base, y0, y1, side, [cx, (y0 + y1) / 2, cz]);
+    if (top) this.flat(top, base.map(([x, z]) => [x, y1, z] as V3), [cx, y0, cz]);
   }
 
   // Side walls between a base ring and a top ring. u = distance along the perimeter, v = -height.

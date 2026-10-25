@@ -42,6 +42,16 @@ export class ParticlePool {
     this.cpu.set([p[0], p[1], p[2], v[0], v[1], v[2], 0, o.life, o.size0, o.size1, o.alpha ?? 1, o.shade ?? 1], i);
   }
 
+  // Move every live particle (used when a looping scene re-bases its coordinates)
+  shift(dx: number, dy = 0, dz = 0) {
+    for (let k = 0; k < this.count; k++) {
+      const i = k * STRIDE;
+      this.cpu[i] += dx;
+      this.cpu[i + 1] += dy;
+      this.cpu[i + 2] += dz;
+    }
+  }
+
   update(dt: number) {
     const c = this.cpu;
     const damp = Math.exp(-this.drag * dt);

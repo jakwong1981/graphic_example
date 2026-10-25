@@ -22,6 +22,7 @@
         <select id="model-select">
           <option value="glb">Ice cream van (GLB file)</option>
           <option value="bus">KMB double-decker bus (UV atlas)</option>
+          <option value="tram">Hong Kong tram #80 (UV atlas)</option>
         </select>
       </label>
       <label><span>View</span>
@@ -37,8 +38,8 @@
     </div>
     <div id="atlas-section" hidden>
       <h2>UV Texture Atlas</h2>
-      <canvas id="atlas-canvas" width="320" height="320" aria-label="Bus UV texture atlas" style="width:100%;max-width:320px;height:auto;background:#111;border-radius:4px"></canvas>
-      <div class="highlight">Each face of the bus samples its own region of this one image: left and right sides (separate so "KMB" reads correctly), front with the LED destination "STAR FERRY 1A", back, roof, tyre tread and hubcaps.</div>
+      <canvas id="atlas-canvas" width="320" height="320" aria-label="Model UV texture atlas" style="width:100%;max-width:320px;height:auto;background:#111;border-radius:4px"></canvas>
+      <div class="highlight">Each face of the model samples its own region of this one image. The bus and tram have separate left and right side regions, so their lettering reads correctly on both sides.</div>
     </div>
     <h2>Theory: GLB Layout</h2>
     <div class="code-block">Header (12 bytes): magic "glTF" | version 2 | total length

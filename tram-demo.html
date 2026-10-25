@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>香港電車 #80 叮叮 - Hong Kong Tram Street</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-family: -apple-system, "PingFang HK", "Noto Sans TC", sans-serif; color: #f3f4f6; }
+    #glcanvas { display: block; width: 100vw; height: 100vh; cursor: grab; }
+    #glcanvas:active { cursor: grabbing; }
+    .panel { position: absolute; background: rgba(17, 24, 39, 0.8); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 12px; padding: 12px 14px; backdrop-filter: blur(8px); }
+    #side { top: 12px; left: 12px; width: 270px; max-height: calc(100vh - 48px); overflow-y: auto; font-size: 13px; }
+    #side h1 { font-size: 15px; margin: 0 0 2px; display: flex; gap: 8px; align-items: center; }
+    #side h1 .badge { background: #dc2626; border-radius: 8px; padding: 2px 8px; font-weight: 900; }
+    #side h2 { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: #9ca3af; margin: 14px 0 6px; }
+    .sub { color: #9ca3af; font-size: 12px; margin: 0; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    button { background: rgba(255,255,255,0.07); color: inherit; border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; padding: 6px 8px; cursor: pointer; font-size: 12px; }
+    button[aria-pressed="true"] { background: #b91c1c; border-color: #f87171; }
+    button.wide { grid-column: span 2; }
+    label.row { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 6px 0; }
+    input[type=range] { width: 130px; accent-color: #ef4444; }
+    #atlas { width: 100%; height: auto; border-radius: 6px; background: #111; margin-top: 6px; }
+    #hud { top: 12px; right: 12px; font-variant-numeric: tabular-nums; min-width: 200px; font-size: 13px; }
+    #hud div { display: flex; justify-content: space-between; gap: 14px; line-height: 1.6; }
+    #hud b { color: #fca5a5; }
+    #help { bottom: 12px; right: 12px; font-size: 12px; line-height: 1.6; }
+    kbd { background: rgba(255,255,255,0.15); border-radius: 4px; padding: 0 5px; font-family: inherit; }
+    a { color: #fca5a5; }
+  </style>
+</head>
+<body>
+  <canvas id="glcanvas" aria-label="Hong Kong tram street 3D view"></canvas>
+
+  <aside id="side" class="panel">
+    <h1><span class="badge">80</span> 香港電車「魅力之都」</h1>
+    <p class="sub">雙層電車 3D UV 模型 · 櫻花電車路街景 · 和昌大押 / 中銀大廈 / 霓虹唐樓</p>
+    <p class="sub"><a href="./">&larr; Home</a> · 拖曳旋轉，滾輪縮放 Drag / wheel</p>
+
+    <h2>鏡頭 Camera</h2>
+    <div class="grid">
+      <button data-cam="street" class="wide" aria-pressed="true">🌸 街景全景 Street</button>
+      <button data-cam="classic" aria-pressed="false">經典特寫 Classic</button>
+      <button data-cam="front" aria-pressed="false">車頭 Front</button>
+      <button data-cam="side" aria-pressed="false">側面彩繪 Side</button>
+      <button data-cam="top" aria-pressed="false">鳥瞰 Top</button>
+      <button data-cam="ride" class="wide" aria-pressed="false">🚋 上層車頭座位 Upper deck (V)</button>
+    </div>
+
+    <h2>電車 Tram</h2>
+    <label class="row"><span>行駛 Drive</span><input type="checkbox" id="drive" checked></label>
+    <label class="row"><span>停站 Stop at stops</span><input type="checkbox" id="stops" checked></label>
+    <label class="row"><span>速度上限 <b id="speed-val">25</b> km/h</span><input type="range" id="speed" min="5" max="40" value="25" aria-label="Maximum tram speed"></label>
+    <div class="grid">
+      <button id="bell" class="wide">🔔 叮叮 Ring bell (Space)</button>
+    </div>
+
+    <h2>場景 Scene</h2>
+    <label class="row"><span>櫻花飄落 Falling petals</span><input type="checkbox" id="petals" checked></label>
+    <label class="row"><span>車輛 Road traffic</span><input type="checkbox" id="traffic" checked></label>
+    <div class="grid">
+      <button data-weather="sunny" aria-pressed="true">☀️ 晴天</button>
+      <button data-weather="cloudy" aria-pressed="false">☁️ 陰天</button>
+      <button data-weather="rain" class="wide" aria-pressed="false">🌧️ 雨天 Rain</button>
+    </div>
+
+    <h2>UV 貼圖 Texture atlas</h2>
+    <canvas id="atlas" width="512" height="512" aria-label="Tram UV texture atlas"></canvas>
+    <p class="sub">One 1024×1024 image: road side, kerb side (doors), front, back, roof, route box "80", wheels.</p>
+    <div class="grid" style="margin-top:8px">
+      <button id="export" class="wide">⬇ 匯出電車 Export tram .glb</button>
+    </div>
+  </aside>
+
+  <div id="hud" class="panel" role="status" aria-live="off">
+    <div><span>速度 Speed</span><b id="spd">0 km/h</b></div>
+    <div><span>狀態 Status</span><b id="state">-</b></div>
+    <div><span>下一站 Next stop</span><b id="next">-</b></div>
+    <div><span>位置 Position</span><b id="pos">0 m</b></div>
+  </div>
+
+  <div id="help" class="panel">
+    <kbd>Space</kbd> 叮叮 &nbsp; <kbd>V</kbd> 上層座位 &nbsp; <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 天氣 &nbsp; <kbd>P</kbd> 暫停 / 開車
+  </div>
+
+  <script type="module" src="/src/main-tram-demo.ts"></script>
+</body>
+</html>

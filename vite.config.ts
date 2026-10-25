@@ -15,7 +15,8 @@ export default defineConfig({
         'model-demo': './model-demo.html',
         'image-to-3d-demo': './image-to-3d-demo.html',
         'car-uv-demo': './car-uv-demo.html',
-        'flight-sim-demo': './flight-sim-demo.html'
+        'flight-sim-demo': './flight-sim-demo.html',
+        'tram-demo': './tram-demo.html'
       }
     }
   }

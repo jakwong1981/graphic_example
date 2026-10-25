@@ -5,7 +5,7 @@ in vec3 vNormal;
 in vec2 vUV;
 in vec3 vColor;
 uniform sampler2D uTex;
-uniform int uMaterial; // 0 = solid, 1 = water
+uniform int uMaterial; // 0 = solid, 1 = water, 2 = emissive
 uniform vec3 uSunDir;
 uniform vec3 uSunColor;
 uniform vec3 uAmbSky;
@@ -42,7 +42,10 @@ void main() {
   vec3 albedo = toLinear(texture(uTex, vUV).rgb * vColor);
   vec3 color;
 
-  if (uMaterial == 1) {
+  if (uMaterial == 2) {
+    // Emissive (neon signs): unlit, slightly over-bright so they glow on dull days
+    color = albedo * 1.35 + uFlash * 0.2;
+  } else if (uMaterial == 1) {
     // Water: animated normals, Fresnel mix of sky reflection and the water body, sun glint
     vec2 g = waveSlope(vWorld.xz, uTime) * (1.0 + uWet * 1.5);
     N = normalize(vec3(-g.x, 1.0, -g.y));

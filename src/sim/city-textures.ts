@@ -1,9 +1,13 @@
 // Tileable UV textures for the city, painted on canvases. Sizes in metres per tile live in TILE (city.ts).
 import { mulberry32 } from './math';
+import { paintSignAtlas } from '../tram/signs';
 
 export type MaterialName =
   | 'glass' | 'office' | 'residential' | 'residential2' | 'landmark'
-  | 'roof' | 'road' | 'concrete' | 'water' | 'hill' | 'container' | 'crane';
+  | 'roof' | 'road' | 'concrete' | 'water' | 'hill' | 'container' | 'crane'
+  // tram street
+  | 'tonglau' | 'shopfront' | 'pawn' | 'paving' | 'asphalt' | 'trackbed' | 'steel' | 'yellow' | 'white'
+  | 'bark' | 'blossom' | 'polegreen' | 'boc' | 'signs' | 'grass';
 
 const SIZE = 512;
 
@@ -168,6 +172,171 @@ const PAINTERS: Record<MaterialName, (ctx: CanvasRenderingContext2D, rnd: () => 
       ctx.stroke();
     }
   },
+
+  // ---- Tram street (tram-demo) ----
+  // One tong lau bay: 4 m wide x 3.5 m floor, window with grille, balcony slab, AC unit
+  tonglau(ctx, rnd) {
+    ctx.fillStyle = '#ece6da';
+    ctx.fillRect(0, 0, SIZE, SIZE);
+    speckle(ctx, rnd, 400, ['rgba(0,0,0,0.05)', 'rgba(255,255,255,0.08)'], 6);
+    const lit = rnd() < 0.3;
+    ctx.fillStyle = lit ? '#e8cf8a' : '#2b3540';
+    ctx.fillRect(90, 90, 330, 250);
+    ctx.fillStyle = '#5b6470'; // window grille
+    for (let x = 90; x <= 420; x += 33) ctx.fillRect(x, 90, 4, 250);
+    ctx.fillRect(90, 210, 330, 5);
+    ctx.fillStyle = rnd() < 0.5 ? '#3f6e8c' : '#7a8b5a'; // half-open shutter / awning
+    ctx.fillRect(90, 80, 330, 26);
+    ctx.fillStyle = '#c9c2b4'; // balcony slab and railing
+    ctx.fillRect(0, 380, SIZE, 30);
+    ctx.fillStyle = '#9a9387';
+    for (let x = 10; x < SIZE; x += 22) ctx.fillRect(x, 410, 6, 70);
+    ctx.fillRect(0, 410, SIZE, 8);
+    if (rnd() < 0.7) { ctx.fillStyle = '#f4f4f2'; ctx.fillRect(440, 250, 60, 50); } // AC unit
+    if (rnd() < 0.5) { // laundry
+      ctx.fillStyle = '#666';
+      ctx.fillRect(60, 360, 400, 4);
+      for (let x = 80; x < 440; x += 50) { ctx.fillStyle = ['#e44', '#48c', '#fff', '#fc4'][Math.floor(rnd() * 4)]; ctx.fillRect(x, 364, 30, 40); }
+    }
+    ctx.fillStyle = 'rgba(0,0,0,0.08)'; // rain stains
+    for (let i = 0; i < 6; i++) ctx.fillRect(rnd() * SIZE, 410, 8, 102);
+  },
+  // Ground-floor shop: 4 m x 4.5 m, fascia, lit window, half-open roller shutter
+  shopfront(ctx, rnd) {
+    ctx.fillStyle = '#2d2f34';
+    ctx.fillRect(0, 0, SIZE, SIZE);
+    ctx.fillStyle = ['#b91c1c', '#1d4ed8', '#047857', '#a16207', '#6d28d9'][Math.floor(rnd() * 5)];
+    ctx.fillRect(0, 30, SIZE, 70); // fascia board
+    const g = ctx.createLinearGradient(0, 120, 0, SIZE);
+    g.addColorStop(0, '#fde9b0');
+    g.addColorStop(1, '#c48a3a');
+    ctx.fillStyle = g;
+    ctx.fillRect(30, 120, 452, 392);
+    speckle(ctx, rnd, 60, ['#a0522d', '#e9d5a1', '#7a4a2a', '#e6e6e6'], 30); // goods on shelves
+    ctx.fillStyle = '#9aa0a8'; // roller shutter
+    const shutter = 120 + rnd() * 160;
+    ctx.fillRect(30, 120, 452, shutter - 120);
+    ctx.fillStyle = '#7d838b';
+    for (let y = 124; y < shutter; y += 10) ctx.fillRect(30, y, 452, 3);
+  },
+  // The Pawn: cream veranda bay with a tall shuttered window and balustrade (3.4 m x 3.6 m)
+  pawn(ctx, rnd) {
+    ctx.fillStyle = '#f3dfa2';
+    ctx.fillRect(0, 0, SIZE, SIZE);
+    speckle(ctx, rnd, 300, ['rgba(120,80,20,0.06)'], 8);
+    ctx.fillStyle = '#7c4a1e'; // cornice
+    ctx.fillRect(0, 0, SIZE, 26);
+    ctx.fillStyle = '#1e293b';
+    ctx.fillRect(140, 70, 232, 330);
+    ctx.fillStyle = '#2f6b4f'; // green louvred shutters
+    ctx.fillRect(96, 70, 44, 330);
+    ctx.fillRect(372, 70, 44, 330);
+    ctx.fillStyle = '#fef3c7';
+    ctx.fillRect(150, 80, 212, 6);
+    ctx.fillStyle = '#e9cf88'; // balustrade
+    ctx.fillRect(40, 400, 432, 20);
+    for (let x = 50; x < 470; x += 30) ctx.fillRect(x, 420, 14, 70);
+    ctx.fillRect(40, 488, 432, 24);
+  },
+  paving(ctx, rnd) {
+    ctx.fillStyle = '#a9a39a';
+    ctx.fillRect(0, 0, SIZE, SIZE);
+    for (let y = 0; y < SIZE; y += 128) {
+      for (let x = 0; x < SIZE; x += 128) {
+        const l = 150 + rnd() * 30;
+        ctx.fillStyle = `rgb(${l},${l - 6},${l - 14})`;
+        ctx.fillRect(x + 3, y + 3, 122, 122);
+      }
+    }
+    speckle(ctx, rnd, 500, ['rgba(0,0,0,0.06)'], 4);
+  },
+  asphalt(ctx, rnd) {
+    ctx.fillStyle = '#34363a';
+    ctx.fillRect(0, 0, SIZE, SIZE);
+    speckle(ctx, rnd, 3000, ['#2e3034', '#3d3f44', '#2a2b2f'], 3);
+    speckle(ctx, rnd, 20, ['rgba(0,0,0,0.25)'], 40); // patches
+  },
+  // Granite setts between and around the rails
+  trackbed(ctx, rnd) {
+    ctx.fillStyle = '#55575b';
+    ctx.fillRect(0, 0, SIZE, SIZE);
+    for (let y = 0; y < SIZE; y += 32) {
+      const off = (y / 32) % 2 ? 24 : 0;
+      for (let x = -48; x < SIZE; x += 48) {
+        const l = 95 + rnd() * 35;
+        ctx.fillStyle = `rgb(${l},${l},${l + 4})`;
+        ctx.fillRect(x + off + 2, y + 2, 44, 28);
+      }
+    }
+  },
+  steel(ctx, rnd) {
+    ctx.fillStyle = '#b8bec6';
+    ctx.fillRect(0, 0, SIZE, SIZE);
+    speckle(ctx, rnd, 200, ['#9aa1aa', '#cfd4da'], 6);
+  },
+  yellow(ctx) {
+    ctx.fillStyle = '#f2c230';
+    ctx.fillRect(0, 0, SIZE, SIZE);
+  },
+  white(ctx) {
+    ctx.fillStyle = '#ecebe6';
+    ctx.fillRect(0, 0, SIZE, SIZE);
+  },
+  bark(ctx, rnd) {
+    ctx.fillStyle = '#4a2e2b';
+    ctx.fillRect(0, 0, SIZE, SIZE);
+    for (let i = 0; i < 80; i++) {
+      ctx.fillStyle = rnd() < 0.5 ? '#3a2220' : '#5c3a35';
+      ctx.fillRect(rnd() * SIZE, 0, 3 + rnd() * 8, SIZE);
+    }
+  },
+  // Sakura blossom: dense pink clusters with lighter and deeper petals
+  blossom(ctx, rnd) {
+    ctx.fillStyle = '#f4a6c6';
+    ctx.fillRect(0, 0, SIZE, SIZE);
+    const colors = ['#fce7f3', '#fbcfe8', '#f9a8d4', '#f472b6', '#ec4899', '#ffffff'];
+    for (let i = 0; i < 2600; i++) {
+      ctx.fillStyle = colors[Math.floor(rnd() * colors.length)];
+      ctx.beginPath();
+      ctx.arc(rnd() * SIZE, rnd() * SIZE, 2 + rnd() * 6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    speckle(ctx, rnd, 40, ['#5c3a35'], 6); // twigs showing through
+  },
+  polegreen(ctx, rnd) {
+    ctx.fillStyle = '#0b4d3a';
+    ctx.fillRect(0, 0, SIZE, SIZE);
+    speckle(ctx, rnd, 300, ['#08402f', '#0f5c46'], 6);
+  },
+  // Bank of China Tower: blue glass with the white X bracing spanning each 12 m tile
+  boc(ctx) {
+    const g = ctx.createLinearGradient(0, 0, SIZE, SIZE);
+    g.addColorStop(0, '#5aa7d6');
+    g.addColorStop(1, '#1f4e79');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, SIZE, SIZE);
+    ctx.fillStyle = 'rgba(20,40,70,0.35)';
+    for (let y = 0; y < SIZE; y += 16) ctx.fillRect(0, y, SIZE, 2);
+    for (let x = 0; x < SIZE; x += 32) ctx.fillRect(x, 0, 2, SIZE);
+    ctx.strokeStyle = '#f1f5f9';
+    ctx.lineWidth = 14;
+    ctx.beginPath();
+    ctx.moveTo(0, 0); ctx.lineTo(SIZE, SIZE);
+    ctx.moveTo(SIZE, 0); ctx.lineTo(0, SIZE);
+    ctx.rect(0, 0, SIZE, SIZE);
+    ctx.stroke();
+  },
+  // Sign atlas (explicit UVs, see tram/signs.ts); painted separately at 1024x1024
+  signs() {},
+  grass(ctx, rnd) {
+    ctx.fillStyle = '#5a9a3a';
+    ctx.fillRect(0, 0, SIZE, SIZE);
+    const colors = ['#4c8a30', '#6cae45', '#7cc152', '#3f7a2a', '#8fcf63'];
+    for (let i = 0; i < 4000; i++) {
+      ctx.fillStyle = colors[Math.floor(rnd() * colors.length)];
+      ctx.fillRect(rnd() * SIZE, rnd() * SIZE, 2, 4 + rnd() * 8); // blades
+    }
+  },
 };
 
 function residentialTile(ctx: CanvasRenderingContext2D, rnd: () => number, base: string) {
@@ -191,6 +360,7 @@ function residentialTile(ctx: CanvasRenderingContext2D, rnd: () => number, base:
 }
 
 export function paintCityTexture(name: MaterialName, seed: number): HTMLCanvasElement {
+  if (name === 'signs') return paintSignAtlas();
   const [c, ctx] = canvas();
   PAINTERS[name](ctx, mulberry32(seed));
   return c;

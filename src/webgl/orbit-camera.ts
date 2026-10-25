@@ -13,6 +13,8 @@ export function createOrbitCamera(canvas: HTMLCanvasElement, distance = 3): Orbi
   let pitch = 0.6;
   let dist = distance;
   let dragging = false;
+  let minDist = 1.5;
+  let maxDist = 10;
 
   canvas.addEventListener('pointerdown', (e) => {
     dragging = true;
@@ -28,7 +30,7 @@ export function createOrbitCamera(canvas: HTMLCanvasElement, distance = 3): Orbi
     'wheel',
     (e) => {
       e.preventDefault();
-      dist = Math.max(1.5, Math.min(10, dist * Math.exp(e.deltaY * 0.001)));
+      dist = Math.max(minDist, Math.min(maxDist, dist * Math.exp(e.deltaY * 0.001)));
     },
     { passive: false }
   );
@@ -42,6 +44,11 @@ export function createOrbitCamera(canvas: HTMLCanvasElement, distance = 3): Orbi
   return {
     view: () => lookAt(position(), [0, 0, 0], [0, 1, 0]),
     position,
-    setDistance: (d) => (dist = d),
+    setDistance: (d) => {
+      dist = d;
+      // widen the wheel zoom range for large models (the bus and tram need ~20 m)
+      maxDist = Math.max(10, d * 2.5);
+      minDist = Math.min(1.5, d * 0.3);
+    },
   };
 }

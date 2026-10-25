@@ -4,7 +4,7 @@ in float vLife;
 in float vAlpha;
 in float vShade;
 in float vDist;
-uniform int uMode; // 0 = flame (additive), 1 = smoke (alpha)
+uniform int uMode; // 0 = flame (additive), 1 = smoke (alpha), 2 = sakura petal (alpha)
 uniform vec3 uLight; // linear light colour for smoke
 uniform vec3 uFogColor;
 uniform float uFogDensity;
@@ -14,6 +14,15 @@ void main() {
   float r = dot(c, c);
   if (r > 1.0) discard;
   float fog = 1.0 - exp(-uFogDensity * vDist);
+  if (uMode == 2) {
+    // Petal: a squashed disc whose width flutters with the particle's shade value (used as a phase)
+    vec2 q = vec2(c.x / max(0.25, abs(sin(vShade + vLife * 18.0))), c.y);
+    if (dot(q, q) > 1.0) discard;
+    vec3 pink = vec3(1.0, 0.62, 0.75) * uLight;
+    vec3 col = mix(pink, uFogColor, fog);
+    fragColor = vec4(pow(col, vec3(1.0 / 2.2)), vAlpha * (1.0 - smoothstep(0.85, 1.0, vLife)));
+    return;
+  }
   if (uMode == 0) {
     // Jet flame: white-blue core -> orange -> dark red as the particle ages
     vec3 hot = vec3(0.75, 0.85, 1.0) * 2.5;
