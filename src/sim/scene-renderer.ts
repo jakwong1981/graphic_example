@@ -7,6 +7,7 @@ import particleVert from '../shaders/sim-particle.vert.glsl?raw';
 import particleFrag from '../shaders/sim-particle.frag.glsl?raw';
 import rainVert from '../shaders/sim-rain.vert.glsl?raw';
 import rainFrag from '../shaders/sim-rain.frag.glsl?raw';
+import crowdVert from '../shaders/crowd.vert.glsl?raw';
 import { createProgram } from '../webgl/shader-program';
 import { createMesh, Mesh, MeshData } from '../webgl/mesh';
 import { createUniforms, Uniforms } from '../webgl/uniforms';
@@ -35,7 +36,15 @@ export interface Drawable {
   emitTexture?: WebGLTexture;
   water?: boolean;
   emissive?: boolean;
+  /** Draw both faces (scanned / photogrammetry meshes with mixed winding) */
+  doubleSided?: boolean;
 }
+
+// Instanced crowd: per-vertex aPart = (colour slot, body part); per-instance attributes below
+export interface CrowdMesh { positions: Float32Array; normals: Float32Array; parts: Float32Array; indices: Uint16Array }
+export interface Crowd { instances: Float32Array; count: number; draw(n: number): void }
+export const CROWD_LAYOUT: [string, number][] = [['iPose', 4], ['iAnim', 4], ['iShirt', 3], ['iPants', 3], ['iSkin', 4], ['iUmb', 3]];
+export const CROWD_STRIDE = CROWD_LAYOUT.reduce((s, [, n]) => s + n, 0);
 
 export const MAX_LAMPS = 16;
 export const MAX_SPOTS = 12;
@@ -79,6 +88,9 @@ export class SceneRenderer {
   private aniso: number;
   private anisoExt: EXT_texture_filter_anisotropic | null;
   private black: WebGLTexture;
+  private crowdProgram: WebGLProgram | null = null;
+  private uc: Uniforms | null = null;
+  private white: WebGLTexture | null = null;
 
   constructor(private gl: WebGL2RenderingContext) {
     this.world = createProgram(gl, worldVert, worldFrag);
@@ -111,7 +123,7 @@ export class SceneRenderer {
   }
 
   // Repeating city texture (UVs are in world units / tile size)
-  tileTexture(source: HTMLCanvasElement): WebGLTexture {
+  tileTexture(source: TexImageSource): WebGLTexture {
     const gl = this.gl;
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
     const t = createTexture(gl, source);
@@ -165,9 +177,14 @@ export class SceneRenderer {
   }
 
   beginWorld(f: FrameState) {
-    const { gl, uw } = this;
+    this.gl.useProgram(this.world);
+    this.worldUniforms(this.uw, f);
+    this.gl.activeTexture(this.gl.TEXTURE0);
+  }
+
+  // Camera, sun, weather and night lights for the world shader (shared by the instanced crowd program)
+  private worldUniforms(uw: Uniforms, f: FrameState) {
     const w = f.weather;
-    gl.useProgram(this.world);
     uw.m4('uView', f.cam.view);
     uw.m4('uProj', f.cam.proj);
     uw.v3('uCamPos', f.cam.pos);
@@ -194,7 +211,76 @@ export class SceneRenderer {
       uw.v4v('uSpotDir', L.spotDir);
       uw.v3('uSpotColor', L.spotColor);
     }
+  }
+
+  /** GPU side of an instanced crowd: one shared person mesh, per-instance pose and colours */
+  crowd(mesh: CrowdMesh, capacity: number): Crowd {
+    const gl = this.gl;
+    if (!this.crowdProgram) {
+      this.crowdProgram = createProgram(gl, crowdVert, worldFrag);
+      this.uc = createUniforms(gl, this.crowdProgram);
+      this.white = gl.createTexture()!;
+      gl.bindTexture(gl.TEXTURE_2D, this.white);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
+    }
+    const prog = this.crowdProgram;
+    const vao = gl.createVertexArray()!;
+    gl.bindVertexArray(vao);
+    const attrib = (name: string, data: Float32Array, size: number) => {
+      const loc = gl.getAttribLocation(prog, name);
+      if (loc < 0) return;
+      gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+      gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
+    };
+    attrib('aPosition', mesh.positions, 3);
+    attrib('aNormal', mesh.normals, 3);
+    attrib('aPart', mesh.parts, 2);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl.createBuffer());
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, mesh.indices, gl.STATIC_DRAW);
+    const instances = new Float32Array(capacity * CROWD_STRIDE);
+    const ibuf = gl.createBuffer()!;
+    gl.bindBuffer(gl.ARRAY_BUFFER, ibuf);
+    gl.bufferData(gl.ARRAY_BUFFER, instances.byteLength, gl.DYNAMIC_DRAW);
+    let offset = 0;
+    for (const [name, size] of CROWD_LAYOUT) {
+      const loc = gl.getAttribLocation(prog, name);
+      if (loc >= 0) {
+        gl.enableVertexAttribArray(loc);
+        gl.vertexAttribPointer(loc, size, gl.FLOAT, false, CROWD_STRIDE * 4, offset * 4);
+        gl.vertexAttribDivisor(loc, 1);
+      }
+      offset += size;
+    }
+    gl.bindVertexArray(null);
+    const count = mesh.indices.length;
+    return {
+      instances,
+      count: 0,
+      draw(n: number) {
+        if (n <= 0) return;
+        gl.bindBuffer(gl.ARRAY_BUFFER, ibuf);
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, instances, 0, n * CROWD_STRIDE);
+        gl.bindVertexArray(vao);
+        gl.drawElementsInstanced(gl.TRIANGLES, count, gl.UNSIGNED_SHORT, 0, n);
+        gl.bindVertexArray(null);
+      },
+    };
+  }
+
+  drawCrowd(f: FrameState, crowd: Crowd) {
+    if (!crowd.count || !this.crowdProgram) return;
+    const gl = this.gl;
+    gl.useProgram(this.crowdProgram);
+    this.worldUniforms(this.uc!, f);
+    this.uc!.i('uMaterial', 0);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.black);
     gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.white!);
+    crowd.draw(crowd.count);
+    gl.useProgram(this.world);
   }
 
   draw(d: Drawable, model: Float32Array) {
@@ -205,7 +291,9 @@ export class SceneRenderer {
     gl.bindTexture(gl.TEXTURE_2D, d.emitTexture ?? this.black);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, d.texture);
+    if (d.doubleSided) gl.disable(gl.CULL_FACE);
     d.mesh.draw();
+    if (d.doubleSided) gl.enable(gl.CULL_FACE);
   }
 
   // Additive light halos (street lamps, headlights, tail lights) as point sprites of one colour

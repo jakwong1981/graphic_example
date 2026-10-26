@@ -14,7 +14,9 @@ import { applyTimeOfDay, formatHour, TimeOfDay } from './sim/daynight';
 import { Windscreen } from './sim/windscreen';
 import { Wiper, WiperMode, wiperSpeed, buildWiperMesh, WIPER, WIPER_PIVOT_LOCAL, LOWER_PANE, UPPER_PANE } from './tram/wiper';
 import { exportGlb } from './image3d/glb-export';
-import { buildStreet, STREET_HALF, TRACKS, LANES, RAIL_TOP } from './tram/street';
+import { loadGlb } from './loaders/glb';
+import { buildStreet, STREET_HALF, TRACKS, LANES, RAIL_TOP, CROSSINGS, ZEBRA_HALF } from './tram/street';
+import { Pedestrians, Mover, buildPersonMesh } from './tram/pedestrians';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const canvas = $<HTMLCanvasElement>('glcanvas');
@@ -89,6 +91,43 @@ for (let i = 0; i < 28; i++) {
   const lane = (i % 2) as 0 | 1;
   vehicles.push({ lane, x: -STREET_HALF + (i >> 1) * 34 + Math.random() * 10, v: 8, vmax: 9 + Math.random() * 5, kind: Math.floor(Math.random() * fleet.length) });
 }
+// Ice cream van (scanned GLB model, 4.8 m, front = +x like the other vehicles): loads in the background,
+// then two vehicles, one per direction, turn into vans
+loadGlb('./icecream-van.glb')
+  .then((m) => {
+    const texture = m.baseColorImage ? renderer.tileTexture(m.baseColorImage) : renderer.tileTexture(document.createElement('canvas'));
+    const model = renderer.mesh(m, texture);
+    model.doubleSided = true;
+    const kind = fleet.push({ model: { ...model, data: m }, scale: 1, len: m.max[0] - m.min[0], lightY: 0.8, halfW: 0.8 }) - 1;
+    for (const lane of [0, 1]) {
+      const v = vehicles.find((c) => c.lane === lane && fleet[c.kind].len < 6); // a car-sized slot
+      if (v) { v.kind = kind; v.vmax = Math.min(v.vmax, 10); } // vans are in no hurry
+    }
+  })
+  .catch((e) => console.warn('Ice cream van not loaded:', e));
+
+// ---- Zebra crossings: anything on the road gives way when someone is on or waiting at a crossing ----
+const peds = new Pedestrians(80);
+const crowd = renderer.crowd(buildPersonMesh(), 80);
+
+const CAR_DECEL = 6;
+const TRAM_DECEL = 1.1 * 1.6;
+/** Distance from the front to the stop line of the next occupied crossing this mover can still stop for */
+// queueRear: rear of a slow vehicle ahead; cars do not stop on the stripes when the queue has no room past them
+function zebraGap(x: number, dir: number, half: number, v: number, decel: number, queueRear: number | null = null) {
+  let best = Infinity;
+  CROSSINGS.forEach((c, i) => {
+    const cx = x + wrapX(c - x);
+    const gap = (cx - dir * (ZEBRA_HALF + 1.2) - (x + dir * half)) * dir;
+    const room = queueRear === null ? Infinity : ((((queueRear - (cx + dir * (ZEBRA_HALF + 0.5))) * dir) % PERIOD) + PERIOD) % PERIOD;
+    const jammed = gap < 40 && room < 2 * half + 1;
+    if (!peds.blocked[i] && !jammed) return;
+    // still stops if it crept past the line, unless it can no longer stop before the stripes
+    if (gap > -1.25 && gap + 1.2 >= (v * v) / (2 * decel) - 0.3) best = Math.min(best, gap);
+  });
+  return best;
+}
+
 function updateTraffic(dt: number) {
   const L = 2 * STREET_HALF;
   for (const lane of [0, 1] as const) {
@@ -99,6 +138,7 @@ function updateTraffic(dt: number) {
       let gap = (ahead.x - v.x) * dir;
       if (gap <= 0) gap += L; // the leader follows the last car around the wrap
       gap -= (fleet[ahead.kind].len + fleet[v.kind].len) / 2;
+      gap = Math.min(gap, zebraGap(v.x, dir, fleet[v.kind].len / 2, v.v, CAR_DECEL, ahead.v < 2 ? ahead.x - dir * fleet[ahead.kind].len / 2 : null) + 2.4); // stop ~0.6 m before the line
       const target = Math.max(0, Math.min(v.vmax, (gap - 3) * 0.7));
       v.v += Math.max(-6, Math.min(2, (target - v.v) * 2)) * dt;
       v.x += dir * Math.max(0, v.v) * dt;
@@ -115,6 +155,7 @@ const ui = {
   speed: $<HTMLInputElement>('speed'),
   petals: $<HTMLInputElement>('petals'),
   traffic: $<HTMLInputElement>('traffic'),
+  peds: $<HTMLInputElement>('peds'),
   autoBell: $<HTMLInputElement>('autobell'),
 };
 ui.speed.addEventListener('input', () => ($('speed-val').textContent = ui.speed.value));
@@ -158,6 +199,8 @@ function updateTram(t: Tram, dt: number) {
       return;
     }
   }
+  const zebra = zebraGap(t.x, t.dir, TRAM.L + 0.1, t.v, TRAM_DECEL);
+  if (zebra < Infinity) target = Math.min(target, Math.sqrt(2 * BRAKE * Math.max(0, zebra - 0.5)));
   t.v = t.v < target ? Math.min(target, t.v + ACCEL * dt) : Math.max(target, t.v - BRAKE * 1.6 * dt);
   t.x += t.dir * t.v * dt;
   autoBell(t, dt);
@@ -304,6 +347,7 @@ let headK = 0; // vehicle headlights
 const lampGlow = new ParticlePool(glCtx, renderer.particle, 512, 0, 0);
 const headGlow = new ParticlePool(glCtx, renderer.particle, 512, 0, 0);
 const tailGlow = new ParticlePool(glCtx, renderer.particle, 512, 0, 0);
+const beaconGlow = new ParticlePool(glCtx, renderer.particle, 64, 0, 0);
 const glow = (pool: ParticlePool, p: V3, size: number, alpha: number) => pool.emit(p, [0, 0, 0], { life: 1, size0: size, size1: size, alpha });
 const smooth01 = (a: number, b: number, x: number) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 
@@ -525,7 +569,7 @@ let last = performance.now();
 let prevEye: V3 | null = null;
 let nightNow = 0;
 function frame(now: number) {
-  const dt = Math.min(0.05, (now - last) / 1000);
+  const dt = Math.max(0, Math.min(0.05, (now - last) / 1000)); // rAF timestamps can precede the last performance.now()
   last = now;
   time += dt;
 
@@ -550,6 +594,20 @@ function frame(now: number) {
   nightNow = tod.night;
   updateLights(dt, tod, cam.pos);
   updateWipers(dt);
+  if (ui.peds.checked) {
+    const movers: Mover[] = trams.map((t) => ({ x: t.x, dir: t.dir, v: t.v, half: TRAM.L + 0.1, decel: TRAM_DECEL }));
+    if (ui.traffic.checked) for (const v of vehicles) movers.push({ x: v.x, dir: v.lane === 0 ? 1 : -1, v: v.v, half: fleet[v.kind].len / 2, decel: CAR_DECEL });
+    const active = 0.3 + 0.7 * (1 - tod.night); // fewer people out late at night
+    peds.update(dt, { movers, rain: weather.rain, active });
+    crowd.count = peds.write(crowd.instances, cam.pos, active, weather.rain);
+  } else {
+    peds.blocked.fill(false);
+    crowd.count = 0;
+  }
+  // Amber beacons at the zebra crossings blink once a second
+  beaconGlow.count = 0;
+  const blink = Math.sin(time * Math.PI * 2) > 0 ? 1 : 0.15;
+  for (const dx of OFFSETS) for (const [x, y, z] of street.beacons) glow(beaconGlow, [x + dx, y, z], 0.9, blink * (0.35 + 0.65 * tod.night));
   const cab = isCab(mode);
 
   const state = { cam, weather: lit, sunDir: tod.lightDir, time, flash, height: canvas.height, lights, night: tod.night };
@@ -570,7 +628,9 @@ function frame(now: number) {
       for (const dx of OFFSETS) renderer.draw(f.model, modelMatrix([v.x + dx, 0, LANES[v.lane]], qAxisAngle([0, 1, 0], heading), f.scale));
     }
   }
+  renderer.drawCrowd(state, crowd);
   renderer.drawGlows(state, lampGlow, [1.0, 0.78, 0.5]);
+  renderer.drawGlows(state, beaconGlow, [1.0, 0.6, 0.1]);
   renderer.drawGlows(state, headGlow, [1.0, 0.97, 0.88]);
   renderer.drawGlows(state, tailGlow, [0.9, 0.06, 0.04]);
   renderer.drawPetals(state, petals);

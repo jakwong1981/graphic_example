@@ -16,6 +16,10 @@ export const TRACKS = [-2.1, 2.1];
 export const LANES = [-5.2, 5.2]; // car lanes: eastbound on the -z side (keep left), westbound on +z
 export const RAIL_TOP = 0.04;
 export const WIRE_Y = RAIL_TOP + POLE_TIP[1];
+// Zebra crossings (x of the centre line); the trees and lamps keep clear of them
+export const CROSSINGS = [-180, -60, 60, 180];
+export const ZEBRA_HALF = 2; // half width along the street
+export const KERB_EDGE = 7; // |z| of the kerb line (pavements run to the frontage at 11)
 const ROAD = 7; // road half width
 const KERB = 11; // building frontage
 
@@ -23,6 +27,7 @@ export interface Street {
   batches: Map<MaterialName, MeshData>;
   blossoms: [number, number, number, number][]; // canopy x, y, z, radius: petals fall from here
   lamps: V3[]; // light position under each street lamp head
+  beacons: V3[]; // flashing amber globes at the zebra crossings
 }
 
 export function buildStreet(seed = 1904): Street {
@@ -52,6 +57,21 @@ export function buildStreet(seed = 1904): Street {
     for (const z of [6.55, 6.8]) flatRect('yellow', -S, S, s * z - 0.06, s * z + 0.06, 0.01);
     const [z0, z1] = s > 0 ? [ROAD, KERB] : [-KERB, -ROAD];
     b.box(-S, S, -0.03, 0.15, z0, z1, 'concrete', 'paving', false);
+  }
+
+  // ---- Zebra crossings: white bars along the traffic direction, amber beacons on both kerbs ----
+  const nearCrossing = (x: number) => Math.min(...CROSSINGS.map((c) => Math.abs(c - x)));
+  const beacons: V3[] = [];
+  for (const c of CROSSINGS) {
+    for (let z = -ROAD + 0.3; z < ROAD - 0.2; z += 1.0) flatRect('white', c - ZEBRA_HALF, c + ZEBRA_HALF, z, z + 0.5, 0.014);
+    for (const s of [-1, 1]) {
+      const [x, z] = [c - ZEBRA_HALF - 0.6, s * 7.35];
+      b.color = [0.16, 0.16, 0.17];
+      b.prism(x, z, 0.06, 0.15, 2.5, 8, 'steel', 'steel', { collide: false });
+      b.color = [1, 1, 1];
+      b.prism(x, z, 0.17, 2.5, 2.86, 10, 'yellow', 'yellow', { collide: false });
+      beacons.push([x, 2.68, z]);
+    }
   }
 
   // ---- Signs: double-sided panels with explicit atlas UVs ----
@@ -97,7 +117,7 @@ export function buildStreet(seed = 1904): Street {
   for (const side of [-1, 1]) {
     const xs: number[] = [];
     for (let x = -S + 10; x < S - 10; x += range(16, 22)) {
-      if (poleGap(x) < 4) continue;
+      if (poleGap(x) < 4 || nearCrossing(x) < 5) continue;
       if (side > 0 && ((x > -38 && x < -16) || (x > 14 && x < 38))) continue; // The Pawn / neon shophouse signs
       xs.push(x);
     }
@@ -317,12 +337,12 @@ export function buildStreet(seed = 1904): Street {
     for (let x = -S + 4 + lrnd() * 12; x < S - 4; x += 20 + lrnd() * 16) {
       // slide forward until clear of the canopies and the tram poles
       let tries = 0;
-      while (tries < 10 && (poleGap(x) < 3 || nearTree(side, x, 5.5))) { x += 1.5; tries++; }
+      while (tries < 10 && (poleGap(x) < 3 || nearTree(side, x, 5.5) || nearCrossing(x) < 4)) { x += 1.5; tries++; }
       if (tries === 10 || x >= S - 3) continue;
       lamps.push(streetLamp(x, side));
     }
   }
 
   b.color = [1, 1, 1];
-  return { batches: b.finish(), blossoms, lamps };
+  return { batches: b.finish(), blossoms, lamps, beacons };
 }
