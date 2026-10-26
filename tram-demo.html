@@ -45,12 +45,14 @@
       <button data-cam="side" aria-pressed="false">側面彩繪 Side</button>
       <button data-cam="top" aria-pressed="false">鳥瞰 Top</button>
       <button data-cam="ride" class="wide" aria-pressed="false">🚋 上層車頭座位 Upper deck (V)</button>
+      <button data-cam="driver" class="wide" aria-pressed="false">🧑‍✈️ 司機位 Driver's cab (C)</button>
     </div>
 
     <h2>電車 Tram</h2>
     <label class="row"><span>行駛 Drive</span><input type="checkbox" id="drive" checked></label>
     <label class="row"><span>停站 Stop at stops</span><input type="checkbox" id="stops" checked></label>
     <label class="row"><span>速度上限 <b id="speed-val">25</b> km/h</span><input type="range" id="speed" min="5" max="40" value="25" aria-label="Maximum tram speed"></label>
+    <label class="row"><span>行駛時叮叮 Ring while running</span><input type="checkbox" id="autobell" checked></label>
     <div class="grid">
       <button id="bell" class="wide">🔔 叮叮 Ring bell (Space)</button>
     </div>
@@ -82,6 +84,14 @@
     </div>
     <p class="sub">自動：夜晚或大雨時亮燈 · Auto: on at night or in heavy rain</p>
 
+    <h2>水撥 Wipers (W)</h2>
+    <div class="grid" style="grid-template-columns: 1fr 1fr 1fr">
+      <button data-wipers="auto" aria-pressed="true">自動 Auto</button>
+      <button data-wipers="on" aria-pressed="false">開 On</button>
+      <button data-wipers="off" aria-pressed="false">關 Off</button>
+    </div>
+    <p class="sub">自動：按雨量間歇 / 慢 / 快 · Auto: intermittent, slow or fast with the rain. 司機位睇得最清楚。</p>
+
     <h2>UV 貼圖 Texture atlas</h2>
     <canvas id="atlas" width="512" height="512" aria-label="Tram UV texture atlas"></canvas>
     <p class="sub">One 1024×1024 image: road side, kerb side (doors), front, back, roof, route box "80", wheels.</p>
@@ -99,7 +109,7 @@
   </div>
 
   <div id="help" class="panel">
-    <kbd>Space</kbd> 叮叮 &nbsp; <kbd>V</kbd> 上層座位 &nbsp; <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 天氣 &nbsp; <kbd>P</kbd> 暫停 / 開車 &nbsp; <kbd>N</kbd> 日 / 夜 &nbsp; <kbd>H</kbd> 車頭燈
+    <kbd>Space</kbd> 叮叮 &nbsp; <kbd>V</kbd> 上層座位 &nbsp; <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 天氣 &nbsp; <kbd>P</kbd> 暫停 / 開車 &nbsp; <kbd>N</kbd> 日 / 夜 &nbsp; <kbd>H</kbd> 車頭燈 &nbsp; <kbd>C</kbd> 司機位 &nbsp; <kbd>W</kbd> 水撥
   </div>
 
   <script type="module" src="/src/main-tram-demo.ts"></script>

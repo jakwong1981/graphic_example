@@ -5,12 +5,14 @@ import { hkTaxi } from './models/hk-taxi';
 import { kmbBus } from './models/kmb-bus';
 import { car } from './models/car';
 import { drawAtlas } from './models/atlas';
-import { V3, add, sub, scale, cross, norm, qAxisAngle, qRotate, modelMatrix } from './sim/math';
+import { V3, add, sub, scale, cross, norm, qAxisAngle, qRotate, qMul, modelMatrix } from './sim/math';
 import { paintCityMaterial } from './sim/city-textures';
 import { ParticlePool } from './sim/particles';
 import { WEATHER, WeatherName, blendWeather, cloneWeather, Rain } from './sim/weather';
 import { SceneRenderer, Camera, Drawable, SceneLights, MAX_LAMPS, MAX_SPOTS } from './sim/scene-renderer';
 import { applyTimeOfDay, formatHour, TimeOfDay } from './sim/daynight';
+import { Windscreen } from './sim/windscreen';
+import { Wiper, WiperMode, wiperSpeed, buildWiperMesh, WIPER, WIPER_PIVOT_LOCAL, LOWER_PANE, UPPER_PANE } from './tram/wiper';
 import { exportGlb } from './image3d/glb-export';
 import { buildStreet, STREET_HALF, TRACKS, LANES, RAIL_TOP } from './tram/street';
 
@@ -113,6 +115,7 @@ const ui = {
   speed: $<HTMLInputElement>('speed'),
   petals: $<HTMLInputElement>('petals'),
   traffic: $<HTMLInputElement>('traffic'),
+  autoBell: $<HTMLInputElement>('autobell'),
 };
 ui.speed.addEventListener('input', () => ($('speed-val').textContent = ui.speed.value));
 const ACCEL = 0.9;
@@ -127,11 +130,21 @@ function nextStop(t: Tram) {
   }
   return { stop: best!, dist: bestD };
 }
+// While running, the driver rings "ding ding" every so often to warn traffic and pedestrians
+let bellTimer = 2;
+const nextBell = () => 6 + Math.random() * 8;
+function autoBell(t: Tram, dt: number) {
+  if (t !== main || !ui.autoBell.checked || t.v < 1.5) return;
+  if ((bellTimer -= dt) <= 0) {
+    bell.ring();
+    bellTimer = nextBell();
+  }
+}
 function updateTram(t: Tram, dt: number) {
   const vmax = Number(ui.speed.value) / 3.6;
   if (t.dwell > 0) {
     t.dwell -= dt;
-    if (t.dwell <= 0 && t === main) bell.ring();
+    if (t.dwell <= 0 && t === main) { bell.ring(); bellTimer = 3 + Math.random() * 3; } // pulling away from the stop
     return;
   }
   let target = ui.drive.checked ? vmax : 0;
@@ -147,6 +160,7 @@ function updateTram(t: Tram, dt: number) {
   }
   t.v = t.v < target ? Math.min(target, t.v + ACCEL * dt) : Math.max(target, t.v - BRAKE * 1.6 * dt);
   t.x += t.dir * t.v * dt;
+  autoBell(t, dt);
   // The street repeats every PERIOD metres, so wrapping is invisible (the camera wraps with the tram)
   const w = wrapX(t.x);
   if (w !== t.x && t === main) {
@@ -155,6 +169,22 @@ function updateTram(t: Tram, dt: number) {
   }
   t.x = w;
 }
+// Each tram has its own wiper on the driver's window (the green one is out of step)
+const wipers = new Map<Tram, Wiper>(trams.map((t, i) => [t, new Wiper(i * 0.7)]));
+const wiperTex = (() => {
+  const c = document.createElement('canvas');
+  c.width = c.height = 4;
+  const x = c.getContext('2d')!;
+  x.fillStyle = '#1c1d20';
+  x.fillRect(0, 0, 4, 4);
+  return renderer.tileTexture(c);
+})();
+const wiperModel = renderer.mesh(buildWiperMesh(), wiperTex);
+const wiperMatrix = (t: Tram, dx: number) => {
+  const q = qAxisAngle([0, 1, 0], t.dir > 0 ? 0 : Math.PI);
+  const pos = add([t.x + dx, RAIL_TOP, t.z], qRotate(q, WIPER_PIVOT_LOCAL));
+  return modelMatrix(pos, qMul(q, qAxisAngle([1, 0, 0], -wipers.get(t)!.angle)), 1); // wiper +z -> glass angle
+};
 const tramMatrix = (t: Tram, dx = 0) => modelMatrix([t.x + dx, RAIL_TOP, t.z], qAxisAngle([0, 1, 0], t.dir > 0 ? 0 : Math.PI), 1);
 
 // ---- Bell: "ding ding" with Web Audio (two strikes of a struck metal bell) ----
@@ -185,6 +215,8 @@ const bell = {
   },
 };
 $('bell').addEventListener('click', () => { bell.start(); bell.ring(); });
+// Browsers only allow sound after a user gesture: unlock audio on the first click or key press anywhere
+for (const ev of ['pointerdown', 'keydown'] as const) addEventListener(ev, () => bell.start(), { once: true });
 
 // ---- Weather ----
 let weatherName: WeatherName = 'sunny';
@@ -197,6 +229,22 @@ function setWeather(name: WeatherName) {
 }
 document.querySelectorAll<HTMLButtonElement>('[data-weather]').forEach((b) => b.addEventListener('click', () => setWeather(b.dataset.weather as WeatherName)));
 const rain = new Rain(4000);
+
+// ---- Wipers (auto / on / off) and the water on the driver's glass ----
+let wiperMode: WiperMode = 'auto';
+function setWipers(m: WiperMode) {
+  wiperMode = m;
+  document.querySelectorAll<HTMLButtonElement>('[data-wipers]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.wipers === m)));
+}
+document.querySelectorAll<HTMLButtonElement>('[data-wipers]').forEach((b) => b.addEventListener('click', () => setWipers(b.dataset.wipers as WiperMode)));
+let glassWet = 0; // builds up quickly in rain, dries slowly afterwards
+function updateWipers(dt: number) {
+  const target = weather.rain;
+  glassWet += (target - glassWet) * (1 - Math.exp(-dt * (target > glassWet ? 0.8 : 0.12)));
+  const { speed, interval } = wiperSpeed(wiperMode, weather.rain);
+  for (const w of wipers.values()) w.update(dt, time, speed, interval);
+}
+const windscreen = new Windscreen(glCtx);
 
 // ---- Time of day: 24 h slider, presets, optional running clock ----
 const lit = cloneWeather(WEATHER.sunny); // weather after the time of day is applied (what gets rendered)
@@ -348,8 +396,10 @@ function emitPetals(dt: number, near: V3) {
 }
 
 // ---- Camera: orbit around the #80 tram, presets, upper-deck ride view ----
-type CamMode = 'street' | 'classic' | 'front' | 'side' | 'top' | 'ride';
-const PRESETS: Record<Exclude<CamMode, 'ride'>, { yaw: number; pitch: number; dist: number }> = {
+type CamMode = 'street' | 'classic' | 'front' | 'side' | 'top' | 'ride' | 'driver';
+type CabMode = 'ride' | 'driver';
+const isCab = (m: CamMode): m is CabMode => m === 'ride' || m === 'driver';
+const PRESETS: Record<Exclude<CamMode, CabMode>, { yaw: number; pitch: number; dist: number }> = {
   street: { yaw: -0.18, pitch: 0.22, dist: 46 }, // down the street from ahead of the tram
   classic: { yaw: -0.55, pitch: 0.06, dist: 14 }, // 3/4 front from the kerb, like the photo
   front: { yaw: 0, pitch: 0.06, dist: 16 },
@@ -362,7 +412,7 @@ let goal: typeof orbit | null = null;
 let rideLook = 0;
 function setCamera(m: CamMode) {
   mode = m;
-  if (m !== 'ride') goal = { ...PRESETS[m] };
+  if (!isCab(m)) goal = { ...PRESETS[m] };
   rideLook = 0;
   document.querySelectorAll<HTMLButtonElement>('[data-cam]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.cam === m)));
 }
@@ -373,7 +423,7 @@ canvas.addEventListener('pointerdown', (e) => { dragging = true; goal = null; ca
 canvas.addEventListener('pointerup', () => (dragging = false));
 canvas.addEventListener('pointermove', (e) => {
   if (!dragging) return;
-  if (mode === 'ride') { rideLook = Math.max(-1.5, Math.min(1.5, rideLook - e.movementX * 0.005)); return; }
+  if (isCab(mode)) { rideLook = Math.max(-1.5, Math.min(1.5, rideLook - e.movementX * 0.005)); return; }
   orbit.yaw -= e.movementX * 0.006;
   orbit.pitch = Math.max(0.0, Math.min(1.45, orbit.pitch + e.movementY * 0.005));
 });
@@ -388,12 +438,12 @@ function camera(dt: number): Camera {
   const aspect = canvas.width / canvas.height;
   let eye: V3;
   let target: V3;
-  if (mode === 'ride') {
-    // Upper deck, front bench, looking out of the front window
+  if (isCab(mode)) {
+    // Upper deck front bench, or the driver's position at the front of the lower deck
     const q = qAxisAngle([0, 1, 0], main.dir > 0 ? 0 : Math.PI);
     const base: V3 = [main.x, RAIL_TOP, main.z];
-    eye = add(base, qRotate(q, [5.3, 3.55, 0]));
-    const look = qRotate(q, [Math.cos(rideLook), -0.08, -Math.sin(rideLook)]);
+    eye = add(base, qRotate(q, mode === 'ride' ? [4.85, 3.5, 0] : [4.9, 1.95, 0]));
+    const look = qRotate(q, [Math.cos(rideLook), mode === 'ride' ? -0.08 : -0.05, -Math.sin(rideLook)]);
     target = add(eye, look);
   } else {
     if (goal) {
@@ -413,7 +463,7 @@ function camera(dt: number): Camera {
   return {
     pos: eye, fwd, right, up: cross(right, fwd), fov: FOV, aspect,
     view: lookAt(eye, target, [0, 1, 0]),
-    proj: perspective(FOV, aspect, mode === 'ride' ? 0.1 : 0.3, 4000),
+    proj: perspective(FOV, aspect, isCab(mode) ? 0.1 : 0.3, 4000),
   };
 }
 
@@ -426,6 +476,8 @@ addEventListener('keydown', (e) => {
   if (e.code === 'Digit2') setWeather('cloudy');
   if (e.code === 'Digit3') setWeather('rain');
   if (e.code === 'KeyN') goToHour(nightNow > 0.5 ? 12 : 22);
+  if (e.code === 'KeyC') setCamera(mode === 'driver' ? 'street' : 'driver');
+  if (e.code === 'KeyW') setWipers(wiperMode === 'auto' ? 'on' : wiperMode === 'on' ? 'off' : 'auto');
   if (e.code === 'KeyH') setHeadlights(headlightMode === 'auto' ? 'on' : headlightMode === 'on' ? 'off' : 'auto');
 });
 $<HTMLButtonElement>('export').addEventListener('click', async (e) => {
@@ -497,14 +549,20 @@ function frame(now: number) {
   const tod = applyTimeOfDay(lit, weather, hour);
   nightNow = tod.night;
   updateLights(dt, tod, cam.pos);
+  updateWipers(dt);
+  const cab = isCab(mode);
 
   const state = { cam, weather: lit, sunDir: tod.lightDir, time, flash, height: canvas.height, lights, night: tod.night };
+  if (cab) windscreen.begin(canvas.width, canvas.height);
   glCtx.viewport(0, 0, canvas.width, canvas.height);
   glCtx.clear(glCtx.COLOR_BUFFER_BIT | glCtx.DEPTH_BUFFER_BIT);
   renderer.drawSky(state);
   renderer.beginWorld(state);
   for (const m of offsetMatrices) for (const d of statics) renderer.draw(d, m);
-  for (const dx of OFFSETS) for (const t of trams) renderer.draw(t.model, tramMatrix(t, dx));
+  for (const dx of OFFSETS) for (const t of trams) {
+    renderer.draw(t.model, tramMatrix(t, dx));
+    renderer.draw(wiperModel, wiperMatrix(t, dx));
+  }
   if (ui.traffic.checked) {
     for (const v of vehicles) {
       const f = fleet[v.kind];
@@ -517,6 +575,17 @@ function frame(now: number) {
   renderer.drawGlows(state, tailGlow, [0.9, 0.06, 0.04]);
   renderer.drawPetals(state, petals);
   renderer.drawRain(state, rain.lines, weather.rain);
+  if (cab) {
+    const driver = mode === 'driver';
+    windscreen.end({
+      cam, tramPos: [main.x, RAIL_TOP, main.z], tramDir: main.dir, glassX: TRAM.L,
+      paneY: driver ? LOWER_PANE : UPPER_PANE, wiper: driver,
+      pivot: WIPER.pivot, blade: WIPER.blade, sweep: WIPER.sweep, wipe: wipers.get(main)!.wipe,
+      time, wet: glassWet, rate: 0.3 + 1.7 * weather.rain,
+      // cab lit by daylight, plus the saloon lights after dark
+      wall: lit.ambSky.map((a, i) => a * 1.3 + lit.sunColor[i] * 0.08 + lights.emit * [0.35, 0.3, 0.22][i] + flash * 0.5) as V3,
+    });
+  }
   updateHud(dt);
   requestAnimationFrame(frame);
 }
