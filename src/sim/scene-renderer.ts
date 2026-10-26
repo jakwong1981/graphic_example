@@ -31,8 +31,25 @@ export interface Camera {
 export interface Drawable {
   mesh: Mesh;
   texture: WebGLTexture;
+  /** Emission map (lit windows, shop interiors, lamp glass), added when the lights are on */
+  emitTexture?: WebGLTexture;
   water?: boolean;
   emissive?: boolean;
+}
+
+export const MAX_LAMPS = 16;
+export const MAX_SPOTS = 12;
+
+// Night lighting: street lamps (point lights) and vehicle headlights (spot lights)
+export interface SceneLights {
+  emit: number; // 0..1: how strongly emission maps and neon glow (shops, windows)
+  lamps: Float32Array; // MAX_LAMPS x vec4: position, intensity
+  lampCount: number;
+  lampColor: V3; // linear
+  spotPos: Float32Array; // MAX_SPOTS x vec4: position, intensity
+  spotDir: Float32Array; // MAX_SPOTS x vec4: direction, unused
+  spotCount: number;
+  spotColor: V3; // linear
 }
 
 export interface FrameState {
@@ -42,6 +59,9 @@ export interface FrameState {
   time: number;
   flash: number;
   height: number; // drawing buffer height in pixels
+  lights?: SceneLights;
+  /** 0..1, stars in the sky */
+  night?: number;
 }
 
 export class SceneRenderer {
@@ -58,6 +78,7 @@ export class SceneRenderer {
   private rainBuf: WebGLBuffer;
   private aniso: number;
   private anisoExt: EXT_texture_filter_anisotropic | null;
+  private black: WebGLTexture;
 
   constructor(private gl: WebGL2RenderingContext) {
     this.world = createProgram(gl, worldVert, worldFrag);
@@ -82,6 +103,11 @@ export class SceneRenderer {
     gl.bindVertexArray(null);
     this.anisoExt = gl.getExtension('EXT_texture_filter_anisotropic');
     this.aniso = this.anisoExt ? Math.min(8, gl.getParameter(this.anisoExt.MAX_TEXTURE_MAX_ANISOTROPY_EXT)) : 1;
+    // 1x1 black emission map for everything that does not glow
+    this.black = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, this.black);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 255]));
+    gl.bindTexture(gl.TEXTURE_2D, null);
   }
 
   // Repeating city texture (UVs are in world units / tile size)
@@ -130,6 +156,7 @@ export class SceneRenderer {
     us.f('uCloudCover', w.cloudCover);
     us.f('uTime', f.time);
     us.f('uFlash', f.flash);
+    us.f('uNight', f.night ?? 0);
     gl.bindVertexArray(this.emptyVao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
@@ -155,6 +182,18 @@ export class SceneRenderer {
     uw.f('uWet', w.wet);
     uw.f('uFlash', f.flash);
     uw.i('uTex', 0);
+    uw.i('uEmit', 1);
+    const L = f.lights;
+    uw.f('uEmitK', L?.emit ?? 0);
+    uw.i('uLampCount', L ? Math.min(MAX_LAMPS, L.lampCount) : 0);
+    uw.i('uSpotCount', L ? Math.min(MAX_SPOTS, L.spotCount) : 0);
+    if (L) {
+      uw.v4v('uLamps', L.lamps);
+      uw.v3('uLampColor', L.lampColor);
+      uw.v4v('uSpotPos', L.spotPos);
+      uw.v4v('uSpotDir', L.spotDir);
+      uw.v3('uSpotColor', L.spotColor);
+    }
     gl.activeTexture(gl.TEXTURE0);
   }
 
@@ -162,8 +201,33 @@ export class SceneRenderer {
     const gl = this.gl;
     this.uw.m4('uModel', model);
     this.uw.i('uMaterial', d.water ? 1 : d.emissive ? 2 : 0);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, d.emitTexture ?? this.black);
+    gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, d.texture);
     d.mesh.draw();
+  }
+
+  // Additive light halos (street lamps, headlights, tail lights) as point sprites of one colour
+  drawGlows(f: FrameState, glows: ParticlePool, color: ArrayLike<number>) {
+    if (!glows.count) return;
+    const { gl, up } = this;
+    const w = f.weather;
+    gl.useProgram(this.particle);
+    up.m4('uView', f.cam.view);
+    up.m4('uProj', f.cam.proj);
+    up.v3('uCamPos', f.cam.pos);
+    up.f('uScale', f.height / (2 * Math.tan(f.cam.fov / 2)));
+    up.v3('uFogColor', w.fog);
+    up.f('uFogDensity', w.fogDensity);
+    up.v3('uLight', color);
+    up.i('uMode', 3);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE);
+    gl.depthMask(false);
+    glows.draw();
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
   }
 
   drawParticles(f: FrameState, smoke: ParticlePool, flame: ParticlePool) {
@@ -218,6 +282,8 @@ export class SceneRenderer {
     ur.m4('uProj', f.cam.proj);
     ur.v3('uCamPos', f.cam.pos);
     ur.f('uIntensity', intensity);
+    const amb = (f.weather.ambSky[0] + f.weather.ambSky[1] + f.weather.ambSky[2]) / 3;
+    ur.f('uLight', Math.min(1, 0.25 + 6 * amb));
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.depthMask(false);

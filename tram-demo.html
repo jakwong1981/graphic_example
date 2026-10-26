@@ -64,6 +64,24 @@
       <button data-weather="rain" class="wide" aria-pressed="false">🌧️ 雨天 Rain</button>
     </div>
 
+    <h2>時間 Time of day</h2>
+    <label class="row"><span>時間 <b id="hour-val">10:00</b></span><input type="range" id="hour" min="0" max="24" step="0.05" value="10" aria-label="Time of day (hours)"></label>
+    <div class="grid">
+      <button data-hour="6.1">🌅 日出 06:06</button>
+      <button data-hour="12">☀️ 白天 12:00</button>
+      <button data-hour="17.9">🌇 黃昏 17:54</button>
+      <button data-hour="22">🌙 夜晚 22:00 (N)</button>
+    </div>
+    <label class="row"><span>時間流動 Clock running</span><input type="checkbox" id="timeflow"></label>
+
+    <h2>車頭燈 Headlights (H)</h2>
+    <div class="grid" style="grid-template-columns: 1fr 1fr 1fr">
+      <button data-headlights="auto" aria-pressed="true">自動 Auto</button>
+      <button data-headlights="on" aria-pressed="false">開 On</button>
+      <button data-headlights="off" aria-pressed="false">關 Off</button>
+    </div>
+    <p class="sub">自動：夜晚或大雨時亮燈 · Auto: on at night or in heavy rain</p>
+
     <h2>UV 貼圖 Texture atlas</h2>
     <canvas id="atlas" width="512" height="512" aria-label="Tram UV texture atlas"></canvas>
     <p class="sub">One 1024×1024 image: road side, kerb side (doors), front, back, roof, route box "80", wheels.</p>
@@ -77,10 +95,11 @@
     <div><span>狀態 Status</span><b id="state">-</b></div>
     <div><span>下一站 Next stop</span><b id="next">-</b></div>
     <div><span>位置 Position</span><b id="pos">0 m</b></div>
+    <div><span>時間 Time</span><b id="clock">10:00</b></div>
   </div>
 
   <div id="help" class="panel">
-    <kbd>Space</kbd> 叮叮 &nbsp; <kbd>V</kbd> 上層座位 &nbsp; <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 天氣 &nbsp; <kbd>P</kbd> 暫停 / 開車
+    <kbd>Space</kbd> 叮叮 &nbsp; <kbd>V</kbd> 上層座位 &nbsp; <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 天氣 &nbsp; <kbd>P</kbd> 暫停 / 開車 &nbsp; <kbd>N</kbd> 日 / 夜 &nbsp; <kbd>H</kbd> 車頭燈
   </div>
 
   <script type="module" src="/src/main-tram-demo.ts"></script>

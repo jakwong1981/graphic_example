@@ -1,21 +1,35 @@
 // Tileable UV textures for the city, painted on canvases. Sizes in metres per tile live in TILE (city.ts).
 import { mulberry32 } from './math';
 import { paintSignAtlas } from '../tram/signs';
+import { paintStorefronts } from '../tram/storefronts';
 
 export type MaterialName =
   | 'glass' | 'office' | 'residential' | 'residential2' | 'landmark'
   | 'roof' | 'road' | 'concrete' | 'water' | 'hill' | 'container' | 'crane'
   // tram street
   | 'tonglau' | 'shopfront' | 'pawn' | 'paving' | 'asphalt' | 'trackbed' | 'steel' | 'yellow' | 'white'
-  | 'bark' | 'blossom' | 'polegreen' | 'boc' | 'signs' | 'grass';
+  | 'bark' | 'blossom' | 'polegreen' | 'boc' | 'signs' | 'grass'
+  | 'storefront' | 'lamp' | 'awning';
 
 const SIZE = 512;
 
-function canvas(): [HTMLCanvasElement, CanvasRenderingContext2D] {
+function canvas(size = SIZE): [HTMLCanvasElement, CanvasRenderingContext2D] {
   const c = document.createElement('canvas');
-  c.width = c.height = SIZE;
+  c.width = c.height = size;
   return [c, c.getContext('2d')!];
 }
+
+// Painters may also draw into `emit`: an emission map (black = unlit) that glows at night
+// `er` is a separate random stream for emission choices, so adding night lights never changes the day look
+type Painter = (ctx: CanvasRenderingContext2D, rnd: () => number, emit: CanvasRenderingContext2D, er: () => number) => void;
+const WARM = ['#ffd98a', '#ffe2a6', '#ffcf7a', '#fff0c8'];
+const COOL = ['#d6e6ff', '#c8dcff', '#e8f0ff'];
+const glow = (e: CanvasRenderingContext2D, color: string, x: number, y: number, w: number, h: number, alpha = 1) => {
+  e.globalAlpha = alpha;
+  e.fillStyle = color;
+  e.fillRect(x, y, w, h);
+  e.globalAlpha = 1;
+};
 
 function speckle(ctx: CanvasRenderingContext2D, rnd: () => number, n: number, colors: string[], size: number) {
   for (let i = 0; i < n; i++) {
@@ -26,8 +40,8 @@ function speckle(ctx: CanvasRenderingContext2D, rnd: () => number, n: number, co
 }
 
 // Facade tiles are 8 m x 8 m: 2 bays (4 m) x 2 floors (4 m), so 64 px per metre
-const PAINTERS: Record<MaterialName, (ctx: CanvasRenderingContext2D, rnd: () => number) => void> = {
-  glass(ctx, rnd) {
+const PAINTERS: Record<MaterialName, Painter> = {
+  glass(ctx, rnd, emit, er) {
     for (let fy = 0; fy < 2; fy++) {
       for (let bx = 0; bx < 4; bx++) {
         const l = 0.85 + rnd() * 0.3;
@@ -36,6 +50,7 @@ const PAINTERS: Record<MaterialName, (ctx: CanvasRenderingContext2D, rnd: () => 
         g.addColorStop(1, `rgb(${40 * l},${80 * l},${110 * l})`);
         ctx.fillStyle = g;
         ctx.fillRect(bx * 128, fy * 256, 128, 256);
+        if (er() < 0.45) glow(emit, COOL[Math.floor(er() * COOL.length)], bx * 128, fy * 256 + 18, 128, 238, 0.55);
       }
     }
     ctx.fillStyle = 'rgba(255,255,255,0.12)'; // sky reflection streak
@@ -46,7 +61,7 @@ const PAINTERS: Record<MaterialName, (ctx: CanvasRenderingContext2D, rnd: () => 
     for (let x = 0; x < SIZE; x += 128) ctx.fillRect(x, 0, 5, SIZE);
     for (let y = 0; y < SIZE; y += 256) ctx.fillRect(0, y, SIZE, 18);
   },
-  office(ctx, rnd) {
+  office(ctx, rnd, emit, er) {
     ctx.fillStyle = '#c4c0b8';
     ctx.fillRect(0, 0, SIZE, SIZE);
     speckle(ctx, rnd, 600, ['rgba(0,0,0,0.05)', 'rgba(255,255,255,0.06)'], 6);
@@ -58,10 +73,12 @@ const PAINTERS: Record<MaterialName, (ctx: CanvasRenderingContext2D, rnd: () => 
       ctx.fillRect(0, y + 60, SIZE, 140);
       ctx.fillStyle = '#9aa0a6';
       for (let x = 0; x < SIZE; x += 64) ctx.fillRect(x, y + 60, 4, 140);
+      // offices working late: runs of lit window panes
+      for (let x = 0; x < SIZE; x += 64) if (er() < 0.4) glow(emit, COOL[Math.floor(er() * COOL.length)], x + 4, y + 60, 60, 140, 0.7);
     }
   },
-  residential(ctx, rnd) { residentialTile(ctx, rnd, '#e6d8bd'); },
-  residential2(ctx, rnd) { residentialTile(ctx, rnd, '#a9c0c8'); },
+  residential(ctx, rnd, emit, er) { residentialTile(ctx, rnd, emit, er, '#e6d8bd'); },
+  residential2(ctx, rnd, emit, er) { residentialTile(ctx, rnd, emit, er, '#a9c0c8'); },
   landmark(ctx, rnd) {
     ctx.fillStyle = '#26323e';
     ctx.fillRect(0, 0, SIZE, SIZE);
@@ -174,35 +191,23 @@ const PAINTERS: Record<MaterialName, (ctx: CanvasRenderingContext2D, rnd: () => 
   },
 
   // ---- Tram street (tram-demo) ----
-  // One tong lau bay: 4 m wide x 3.5 m floor, window with grille, balcony slab, AC unit
-  tonglau(ctx, rnd) {
-    ctx.fillStyle = '#ece6da';
-    ctx.fillRect(0, 0, SIZE, SIZE);
-    speckle(ctx, rnd, 400, ['rgba(0,0,0,0.05)', 'rgba(255,255,255,0.08)'], 6);
-    const lit = rnd() < 0.3;
-    ctx.fillStyle = lit ? '#e8cf8a' : '#2b3540';
-    ctx.fillRect(90, 90, 330, 250);
-    ctx.fillStyle = '#5b6470'; // window grille
-    for (let x = 90; x <= 420; x += 33) ctx.fillRect(x, 90, 4, 250);
-    ctx.fillRect(90, 210, 330, 5);
-    ctx.fillStyle = rnd() < 0.5 ? '#3f6e8c' : '#7a8b5a'; // half-open shutter / awning
-    ctx.fillRect(90, 80, 330, 26);
-    ctx.fillStyle = '#c9c2b4'; // balcony slab and railing
-    ctx.fillRect(0, 380, SIZE, 30);
-    ctx.fillStyle = '#9a9387';
-    for (let x = 10; x < SIZE; x += 22) ctx.fillRect(x, 410, 6, 70);
-    ctx.fillRect(0, 410, SIZE, 8);
-    if (rnd() < 0.7) { ctx.fillStyle = '#f4f4f2'; ctx.fillRect(440, 250, 60, 50); } // AC unit
-    if (rnd() < 0.5) { // laundry
-      ctx.fillStyle = '#666';
-      ctx.fillRect(60, 360, 400, 4);
-      for (let x = 80; x < 440; x += 50) { ctx.fillStyle = ['#e44', '#48c', '#fff', '#fc4'][Math.floor(rnd() * 4)]; ctx.fillRect(x, 364, 30, 40); }
+  // 4 x 4 tong lau bays (16 m x 14 m) on a 1024 canvas, so lit windows vary from flat to flat
+  tonglau(ctx, rnd, emit, er) {
+    for (let by = 0; by < 4; by++) {
+      for (let bx = 0; bx < 4; bx++) {
+        for (const c of [ctx, emit]) {
+          c.save();
+          c.translate(bx * 256, by * 256);
+          c.scale(0.5, 0.5);
+        }
+        tongLauBay(ctx, rnd, emit, er);
+        ctx.restore();
+        emit.restore();
+      }
     }
-    ctx.fillStyle = 'rgba(0,0,0,0.08)'; // rain stains
-    for (let i = 0; i < 6; i++) ctx.fillRect(rnd() * SIZE, 410, 8, 102);
   },
   // Ground-floor shop: 4 m x 4.5 m, fascia, lit window, half-open roller shutter
-  shopfront(ctx, rnd) {
+  shopfront(ctx, rnd, emit) {
     ctx.fillStyle = '#2d2f34';
     ctx.fillRect(0, 0, SIZE, SIZE);
     ctx.fillStyle = ['#b91c1c', '#1d4ed8', '#047857', '#a16207', '#6d28d9'][Math.floor(rnd() * 5)];
@@ -218,9 +223,13 @@ const PAINTERS: Record<MaterialName, (ctx: CanvasRenderingContext2D, rnd: () => 
     ctx.fillRect(30, 120, 452, shutter - 120);
     ctx.fillStyle = '#7d838b';
     for (let y = 124; y < shutter; y += 10) ctx.fillRect(30, y, 452, 3);
+    emit.globalAlpha = 0.8;
+    emit.drawImage(ctx.canvas, 30, shutter, 452, SIZE - shutter, 30, shutter, 452, SIZE - shutter);
+    emit.drawImage(ctx.canvas, 0, 30, SIZE, 70, 0, 30, SIZE, 70);
+    emit.globalAlpha = 1;
   },
   // The Pawn: cream veranda bay with a tall shuttered window and balustrade (3.4 m x 3.6 m)
-  pawn(ctx, rnd) {
+  pawn(ctx, rnd, emit) {
     ctx.fillStyle = '#f3dfa2';
     ctx.fillRect(0, 0, SIZE, SIZE);
     speckle(ctx, rnd, 300, ['rgba(120,80,20,0.06)'], 8);
@@ -228,6 +237,7 @@ const PAINTERS: Record<MaterialName, (ctx: CanvasRenderingContext2D, rnd: () => 
     ctx.fillRect(0, 0, SIZE, 26);
     ctx.fillStyle = '#1e293b';
     ctx.fillRect(140, 70, 232, 330);
+    glow(emit, '#ffd08a', 140, 70, 232, 330, 0.75); // the restaurant upstairs
     ctx.fillStyle = '#2f6b4f'; // green louvred shutters
     ctx.fillRect(96, 70, 44, 330);
     ctx.fillRect(372, 70, 44, 330);
@@ -238,6 +248,22 @@ const PAINTERS: Record<MaterialName, (ctx: CanvasRenderingContext2D, rnd: () => 
     for (let x = 50; x < 470; x += 30) ctx.fillRect(x, 420, 14, 70);
     ctx.fillRect(40, 488, 432, 24);
   },
+  // Street lamp glass: pale in the day, bright sodium-white at night
+  lamp(ctx, _rnd, emit) {
+    ctx.fillStyle = '#e8e6dc';
+    ctx.fillRect(0, 0, SIZE, SIZE);
+    glow(emit, '#fff1cc', 0, 0, SIZE, SIZE);
+  },
+  // Canvas awning, 1 m tile: two stripes, tinted per shop by the vertex colour
+  awning(ctx, rnd) {
+    for (let x = 0; x < SIZE; x += 128) {
+      ctx.fillStyle = (x / 128) % 2 ? '#ffffff' : '#c9c9c9';
+      ctx.fillRect(x, 0, 128, SIZE);
+    }
+    speckle(ctx, rnd, 300, ['rgba(0,0,0,0.05)'], 6);
+  },
+  // Storefront atlas (explicit UVs, see tram/storefronts.ts); painted separately at 2048x2048
+  storefront() {},
   paving(ctx, rnd) {
     ctx.fillStyle = '#a9a39a';
     ctx.fillRect(0, 0, SIZE, SIZE);
@@ -339,7 +365,37 @@ const PAINTERS: Record<MaterialName, (ctx: CanvasRenderingContext2D, rnd: () => 
   },
 };
 
-function residentialTile(ctx: CanvasRenderingContext2D, rnd: () => number, base: string) {
+// One tong lau bay: 4 m wide x 3.5 m floor (512 px), window with grille, balcony slab, AC unit
+function tongLauBay(ctx: CanvasRenderingContext2D, rnd: () => number, emit: CanvasRenderingContext2D, er: () => number) {
+  ctx.fillStyle = '#ece6da';
+  ctx.fillRect(0, 0, SIZE, SIZE);
+  speckle(ctx, rnd, 400, ['rgba(0,0,0,0.05)', 'rgba(255,255,255,0.08)'], 6);
+  const lit = rnd() < 0.3;
+  // At night more flats switch on: warm bulbs or the cool flicker of a TV
+  if (lit || er() < 0.4) glow(emit, er() < 0.8 ? WARM[Math.floor(er() * WARM.length)] : COOL[0], 90, 90, 330, 250, 0.85);
+  ctx.fillStyle = lit ? '#e8cf8a' : '#2b3540';
+  ctx.fillRect(90, 90, 330, 250);
+  ctx.fillStyle = '#5b6470'; // window grille
+  for (let x = 90; x <= 420; x += 33) ctx.fillRect(x, 90, 4, 250);
+  ctx.fillRect(90, 210, 330, 5);
+  ctx.fillStyle = rnd() < 0.5 ? '#3f6e8c' : '#7a8b5a'; // half-open shutter / awning
+  ctx.fillRect(90, 80, 330, 26);
+  ctx.fillStyle = '#c9c2b4'; // balcony slab and railing
+  ctx.fillRect(0, 380, SIZE, 30);
+  ctx.fillStyle = '#9a9387';
+  for (let x = 10; x < SIZE; x += 22) ctx.fillRect(x, 410, 6, 70);
+  ctx.fillRect(0, 410, SIZE, 8);
+  if (rnd() < 0.7) { ctx.fillStyle = '#f4f4f2'; ctx.fillRect(440, 250, 60, 50); } // AC unit
+  if (rnd() < 0.5) { // laundry
+    ctx.fillStyle = '#666';
+    ctx.fillRect(60, 360, 400, 4);
+    for (let x = 80; x < 440; x += 50) { ctx.fillStyle = ['#e44', '#48c', '#fff', '#fc4'][Math.floor(rnd() * 4)]; ctx.fillRect(x, 364, 30, 40); }
+  }
+  ctx.fillStyle = 'rgba(0,0,0,0.08)'; // rain stains
+  for (let i = 0; i < 6; i++) ctx.fillRect(rnd() * SIZE, 410, 8, 102);
+}
+
+function residentialTile(ctx: CanvasRenderingContext2D, rnd: () => number, emit: CanvasRenderingContext2D, er: () => number, base: string) {
   ctx.fillStyle = base;
   ctx.fillRect(0, 0, SIZE, SIZE);
   speckle(ctx, rnd, 500, ['rgba(0,0,0,0.05)'], 6);
@@ -347,8 +403,10 @@ function residentialTile(ctx: CanvasRenderingContext2D, rnd: () => number, base:
     for (let bx = 0; bx < 4; bx++) {
       const x = bx * 128 + 24;
       const y = fy * 128 + 28;
-      ctx.fillStyle = rnd() < 0.25 ? '#e9d79a' : '#2b3742'; // some lit windows
+      const lit = rnd() < 0.25;
+      ctx.fillStyle = lit ? '#e9d79a' : '#2b3742'; // some lit windows
       ctx.fillRect(x, y, 56, 62);
+      if (lit || er() < 0.35) glow(emit, er() < 0.8 ? WARM[Math.floor(er() * WARM.length)] : COOL[Math.floor(er() * COOL.length)], x, y, 56, 62, 0.85);
       ctx.fillStyle = '#f3f3f3'; // air conditioner box
       if (rnd() < 0.6) ctx.fillRect(x + 64, y + 34, 30, 22);
       ctx.fillStyle = '#777'; // laundry pole
@@ -359,9 +417,28 @@ function residentialTile(ctx: CanvasRenderingContext2D, rnd: () => number, base:
   for (let i = 0; i < 12; i++) ctx.fillRect(rnd() * SIZE, 0, 6 + rnd() * 10, SIZE);
 }
 
+// Canvas size per material (default 512)
+const CANVAS_SIZE: Partial<Record<MaterialName, number>> = { tonglau: 1024 };
+// Materials whose painters draw an emission map
+const EMISSIVE = new Set<MaterialName>(['glass', 'office', 'residential', 'residential2', 'tonglau', 'shopfront', 'pawn', 'lamp']);
+
+export interface CityMaterial {
+  color: HTMLCanvasElement;
+  emit: HTMLCanvasElement | null; // null: nothing glows at night
+}
+
+export function paintCityMaterial(name: MaterialName, seed: number): CityMaterial {
+  if (name === 'signs') return { color: paintSignAtlas(), emit: null };
+  if (name === 'storefront') return paintStorefronts();
+  const size = CANVAS_SIZE[name] ?? SIZE;
+  const [c, ctx] = canvas(size);
+  const [e, ectx] = canvas(size);
+  ectx.fillStyle = '#000';
+  ectx.fillRect(0, 0, size, size);
+  PAINTERS[name](ctx, mulberry32(seed), ectx, mulberry32(seed * 7919 + 13));
+  return { color: c, emit: EMISSIVE.has(name) ? e : null };
+}
+
 export function paintCityTexture(name: MaterialName, seed: number): HTMLCanvasElement {
-  if (name === 'signs') return paintSignAtlas();
-  const [c, ctx] = canvas();
-  PAINTERS[name](ctx, mulberry32(seed));
-  return c;
+  return paintCityMaterial(name, seed).color;
 }

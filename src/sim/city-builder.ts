@@ -8,10 +8,12 @@ export const TILE: Record<MaterialName, [number, number]> = {
   glass: [8, 8], office: [8, 8], residential: [8, 12], residential2: [8, 12], landmark: [8, 8],
   roof: [20, 20], road: [120, 120], concrete: [10, 10], water: [40, 40], hill: [60, 60],
   container: [24, 8], crane: [10, 10],
-  tonglau: [4, 3.5], shopfront: [4, 4.5], pawn: [3.4, 3.6], paving: [2, 2], asphalt: [8, 8], trackbed: [2, 2],
+  tonglau: [16, 14], shopfront: [4, 4.5], pawn: [3.4, 3.6], paving: [2, 2], asphalt: [8, 8], trackbed: [2, 2],
   steel: [1, 1], yellow: [1, 1], white: [1, 1], bark: [1, 2], blossom: [3, 3], polegreen: [1, 2], boc: [12, 12],
   signs: [1, 1], // explicit atlas UVs
   grass: [2, 2],
+  storefront: [1, 1], // explicit atlas UVs
+  lamp: [1, 1], awning: [1, 1],
 };
 
 export interface Box3 { min: V3; max: V3 }

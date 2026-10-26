@@ -9,6 +9,7 @@ import type { MeshData } from '../webgl/mesh';
 import { SIGNS, SIGN_ATLAS, signSlot } from './signs';
 import { TRAM, POLE_TIP } from '../models/hk-tram';
 import { buildSakura } from './sakura';
+import { storefrontUV, pickShop, isShutter, SEAFOOD_SHOP } from './storefronts';
 
 export const STREET_HALF = 240; // street spans x -240..240
 export const TRACKS = [-2.1, 2.1];
@@ -21,6 +22,7 @@ const KERB = 11; // building frontage
 export interface Street {
   batches: Map<MaterialName, MeshData>;
   blossoms: [number, number, number, number][]; // canopy x, y, z, radius: petals fall from here
+  lamps: V3[]; // light position under each street lamp head
 }
 
 export function buildStreet(seed = 1904): Street {
@@ -101,7 +103,54 @@ export function buildStreet(seed = 1904): Street {
     }
     treeXs.set(side, xs);
   }
-  const nearTree = (side: number, x: number) => treeXs.get(side)!.some((t) => Math.abs(t - x) < 5);
+  const nearTree = (side: number, x: number, r = 5) => treeXs.get(side)!.some((t) => Math.abs(t - x) < r);
+
+  // ---- Storefronts: one atlas slot per shop unit, laid just in front of the ground-floor box ----
+  // Own random stream, so the building layout stays the same as before shops were added
+  const srnd = mulberry32(seed + 101);
+  const AWNINGS: V3[] = [[0.85, 0.16, 0.16], [0.2, 0.45, 0.8], [0.12, 0.55, 0.3], [0.95, 0.62, 0.12], [0.55, 0.22, 0.6], [0.92, 0.92, 0.9]];
+  // Shop facade quad in the plane z = const (facing = -1: faces -z, +1: faces +z)
+  const storefront = (i: number, x0: number, x1: number, y0: number, y1: number, z: number, facing: number) => {
+    const s = (x: number) => (facing < 0 ? (x1 - x) / (x1 - x0) : (x - x0) / (x1 - x0));
+    const t = (y: number) => (y1 - y) / (y1 - y0);
+    const P = (x: number, y: number): V3 => [x, y, z];
+    const uv = (x: number, y: number) => storefrontUV(i, s(x), t(y));
+    b.quad('storefront', P(x0, y0), P(x1, y0), P(x1, y1), P(x0, y1),
+      uv(x0, y0), uv(x1, y0), uv(x1, y1), uv(x0, y1), [(x0 + x1) / 2, (y0 + y1) / 2, z - facing]);
+  };
+  // Sloped canvas awning over a shop, with a valance along the outer edge (both faces, tinted)
+  const awning = (x0: number, x1: number, side: number, tint: V3) => {
+    const zw = side * (KERB - 0.05);
+    const zo = side * (KERB - 1.5);
+    const [yw, yo, drop] = [3.8, 3.35, 0.32];
+    const w = x1 - x0;
+    const A: V3 = [x0, yw, zw], B: V3 = [x1, yw, zw], C: V3 = [x1, yo, zo], D: V3 = [x0, yo, zo];
+    const E: V3 = [x1, yo - drop, zo], F: V3 = [x0, yo - drop, zo];
+    for (const s of [1, -1]) {
+      const over: V3 = [(x0 + x1) / 2, (yw + yo) / 2 - s, (zw + zo) / 2];
+      b.tri('awning', A, B, C, [0, 0], [w, 0], [w, 1.5], over, tint);
+      b.tri('awning', A, C, D, [0, 0], [w, 1.5], [0, 1.5], over, tint);
+      const front: V3 = [(x0 + x1) / 2, yo - drop / 2, zo + s];
+      b.tri('awning', D, C, E, [0, 0], [w, 0], [w, drop], front, tint);
+      b.tri('awning', D, E, F, [0, 0], [w, drop], [0, drop], front, tint);
+    }
+  };
+  // A row of shop units along a lot frontage
+  const shopRow = (x0: number, x1: number, side: number) => {
+    const n = Math.max(1, Math.round((x1 - x0) / 4.5));
+    const w = (x1 - x0) / n;
+    const z = side * (KERB - 0.03);
+    for (let k = 0; k < n; k++) {
+      const a = x0 + k * w + 0.18;
+      const e = x0 + (k + 1) * w - 0.18;
+      const i = pickShop(srnd);
+      storefront(i, a, e, 0.15, 4.4, z, -side);
+      const wantAwning = srnd() < 0.45;
+      const tint = AWNINGS[Math.floor(srnd() * AWNINGS.length)];
+      // awnings would poke into the sakura canopies
+      if (wantAwning && !isShutter(i) && !nearTree(side, (a + e) / 2, 4.2 + (e - a) / 2)) awning(a, e, side, tint);
+    }
+  };
 
   // ---- Buildings ----
   const PASTEL: V3[] = [[1, 1, 1], [1.05, 0.9, 0.82], [0.88, 1.0, 0.92], [0.85, 0.92, 1.05], [1.05, 0.98, 0.78], [1.0, 0.86, 0.9], [0.8, 0.8, 0.82]];
@@ -113,6 +162,7 @@ export function buildStreet(seed = 1904): Street {
     const [z0, z1] = zSpan(side, range(12, 16));
     b.color = [1, 1, 1];
     b.box(x0, x1, 0, 4.5, z0, z1, 'shopfront', null, false);
+    shopRow(x0, x1, side);
     tint(pick(PASTEL));
     b.box(x0, x1, 4.5, 4.5 + floors * 3.5, z0, z1, 'tonglau', 'roof', false);
     b.color = [1, 1, 1];
@@ -131,6 +181,7 @@ export function buildStreet(seed = 1904): Street {
     const [z0, z1] = zSpan(side, range(16, 24));
     b.color = [1, 1, 1];
     b.box(x0, x1, 0, 6, z0, z1, 'shopfront', 'roof', false);
+    shopRow(x0, x1, side);
     tint(pick(PASTEL));
     const inset = 1.5;
     const [tz0, tz1] = side > 0 ? [z0 + inset + 2, z1 - inset] : [z0 + inset, z1 - inset - 2];
@@ -143,6 +194,9 @@ export function buildStreet(seed = 1904): Street {
     const H = 16;
     b.box(x0, x1, 0, H, 13.5, 26, 'pawn', 'roof', false);
     b.box(x0, x1, 0, 4.5, 13.2, 13.5, 'shopfront', null, false);
+    const mid = (x0 + x1) / 2; // restaurant behind the arcade
+    storefront(SEAFOOD_SHOP, x0 + 0.4, mid - 0.1, 0.15, 4.4, 13.17, -1);
+    storefront(SEAFOOD_SHOP, mid + 0.1, x1 - 0.4, 0.15, 4.4, 13.17, -1);
     b.box(x0, x1, 4.5, H, 9, 13.5, 'pawn', 'roof', false); // verandas above the arcade
     for (let x = x0 + 0.3; x < x1; x += (x1 - x0 - 0.6) / 5) b.box(x, x + 0.6, 0.15, 4.5, 9, 9.6, 'pawn', null, false); // arcade pillars
     for (const y of [4.5, 8.1, 11.7]) b.box(x0 - 0.2, x1 + 0.2, y - 0.25, y, 8.8, 13.5, 'concrete', 'concrete', false); // cornices
@@ -241,6 +295,34 @@ export function buildStreet(seed = 1904): Street {
       blossoms.push(buildSakura(b, x, side * 9.2, 0.15, { scale: range(0.9, 1.08), roadDir: side, rnd }));
     }
   }
+  // ---- Street lamps: random spacing along both kerbs, clear of the trees and the tram poles ----
+  const lrnd = mulberry32(seed + 202);
+  const lamps: V3[] = [];
+  const streetLamp = (x: number, side: number): V3 => {
+    const zp = side * 7.75; // pole at the kerb edge
+    const zh = side * 5.3; // head over the kerb-side traffic lane
+    const top = 7.9;
+    b.color = [0.42, 0.45, 0.48];
+    b.prism(x, zp, 0.11, 0.15, top, 8, 'steel', 'steel', { collide: false });
+    b.prism(x, zp, 0.17, 0.15, 1.2, 8, 'steel', null, { collide: false }); // thicker base
+    b.box(x - 0.05, x + 0.05, top - 0.26, top - 0.14, Math.min(zp, zh), Math.max(zp, zh), 'steel', 'steel', false); // arm
+    const [h0, h1] = [zh - 0.55, zh + 0.55];
+    b.box(x - 0.2, x + 0.2, top - 0.42, top - 0.16, h0, h1, 'steel', 'steel', false); // lamp housing
+    b.color = [1, 1, 1];
+    const y = top - 0.43;
+    b.flat('lamp', [[x - 0.16, y, h0 + 0.06], [x + 0.16, y, h0 + 0.06], [x + 0.16, y, h1 - 0.06], [x - 0.16, y, h1 - 0.06]], [x, top, zh]);
+    return [x, y - 0.15, zh];
+  };
+  for (const side of [-1, 1]) {
+    for (let x = -S + 4 + lrnd() * 12; x < S - 4; x += 20 + lrnd() * 16) {
+      // slide forward until clear of the canopies and the tram poles
+      let tries = 0;
+      while (tries < 10 && (poleGap(x) < 3 || nearTree(side, x, 5.5))) { x += 1.5; tries++; }
+      if (tries === 10 || x >= S - 3) continue;
+      lamps.push(streetLamp(x, side));
+    }
+  }
+
   b.color = [1, 1, 1];
-  return { batches: b.finish(), blossoms };
+  return { batches: b.finish(), blossoms, lamps };
 }

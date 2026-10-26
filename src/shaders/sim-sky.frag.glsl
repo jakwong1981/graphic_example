@@ -15,6 +15,7 @@ uniform float uSunVis;
 uniform float uCloudCover;
 uniform float uTime;
 uniform float uFlash;
+uniform float uNight; // 0..1 star visibility
 out vec4 fragColor;
 
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -33,7 +34,15 @@ void main() {
   vec3 d = normalize(uCamFwd + vNdc.x * uAspect * uTanHalf * uCamRight + vNdc.y * uTanHalf * uCamUp);
   vec3 color = mix(uFogColor, uSkyTop, pow(clamp(d.y, 0.0, 1.0), 0.5));
 
-  // Sun disk + halo
+  // Stars (drawn before the clouds, which cover them)
+  if (uNight > 0.01 && d.y > 0.0) {
+    vec3 g = floor(d * 380.0);
+    float h = fract(sin(dot(g, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+    float twinkle = 0.7 + 0.3 * sin(uTime * (2.0 + h * 5.0) + h * 40.0);
+    color += vec3(0.9, 0.93, 1.0) * step(0.9975, h) * (h - 0.9975) * 400.0 * twinkle * uNight * smoothstep(0.02, 0.25, d.y);
+  }
+
+  // Sun disk + halo (at night uSunDir / uSunColor are the moon)
   float s = max(dot(d, uSunDir), 0.0);
   color += uSunColor * (pow(s, 1500.0) * 20.0 + pow(s, 8.0) * 0.25) * uSunVis;
 

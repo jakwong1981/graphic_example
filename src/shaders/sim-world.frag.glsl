@@ -17,7 +17,48 @@ uniform float uFogDensity;
 uniform float uTime;
 uniform float uWet;
 uniform float uFlash;
+// Night lighting
+uniform sampler2D uEmit; // emission map (black = unlit)
+uniform float uEmitK; // 0..1 lights on
+const int MAX_LAMPS = 16;
+const int MAX_SPOTS = 12;
+uniform int uLampCount;
+uniform vec4 uLamps[MAX_LAMPS]; // street lamps: position, intensity
+uniform vec3 uLampColor;
+uniform int uSpotCount;
+uniform vec4 uSpotPos[MAX_SPOTS]; // headlights: position, intensity
+uniform vec4 uSpotDir[MAX_SPOTS];
+uniform vec3 uSpotColor;
 out vec4 fragColor;
+
+// Diffuse + specular from street lamps and headlights. `spec` gets the highlights (strong on wet ground).
+vec3 localLights(vec3 N, vec3 V, float wet, out vec3 spec) {
+  vec3 diff = vec3(0.0);
+  spec = vec3(0.0);
+  float shine = 0.15 + wet * 2.5;
+  for (int i = 0; i < MAX_LAMPS; i++) {
+    if (i >= uLampCount) break;
+    vec3 L = uLamps[i].xyz - vWorld;
+    float d = length(L);
+    L /= d;
+    float a = uLamps[i].w * (1.0 - smoothstep(9.0, 26.0, d)) / (1.0 + 0.045 * d * d);
+    // lamps shine downwards: a soft cone so facades above the lamp stay dim
+    a *= 0.25 + 0.75 * smoothstep(-0.2, 0.6, -L.y);
+    diff += uLampColor * a * max(dot(N, L), 0.0);
+    spec += uLampColor * a * pow(max(dot(N, normalize(L + V)), 0.0), 40.0) * shine;
+  }
+  for (int i = 0; i < MAX_SPOTS; i++) {
+    if (i >= uSpotCount) break;
+    vec3 L = uSpotPos[i].xyz - vWorld;
+    float d = length(L);
+    L /= d;
+    float cone = smoothstep(0.86, 0.96, dot(-L, uSpotDir[i].xyz));
+    float a = uSpotPos[i].w * cone * (1.0 - smoothstep(18.0, 45.0, d)) / (1.0 + 0.012 * d * d);
+    diff += uSpotColor * a * (max(dot(N, L), 0.0) * 0.7 + 0.3); // wrapped so the beam shows on the road
+    spec += uSpotColor * a * pow(max(dot(N, normalize(L + V)), 0.0), 40.0) * shine;
+  }
+  return diff;
+}
 
 vec3 toLinear(vec3 c) { return pow(c, vec3(2.2)); }
 vec3 skyColor(vec3 d) { return mix(uFogColor, uSkyTop, pow(clamp(d.y, 0.0, 1.0), 0.5)) + uFlash * 0.5; }
@@ -43,8 +84,8 @@ void main() {
   vec3 color;
 
   if (uMaterial == 2) {
-    // Emissive (neon signs): unlit, slightly over-bright so they glow on dull days
-    color = albedo * 1.35 + uFlash * 0.2;
+    // Emissive (neon signs): unlit, slightly over-bright so they glow on dull days, brighter at night
+    color = albedo * (1.35 + uEmitK * 1.4) + uFlash * 0.2;
   } else if (uMaterial == 1) {
     // Water: animated normals, Fresnel mix of sky reflection and the water body, sun glint
     vec2 g = waveSlope(vWorld.xz, uTime) * (1.0 + uWet * 1.5);
@@ -62,11 +103,16 @@ void main() {
     float diffuse = max(dot(N, uSunDir), 0.0);
     vec3 H = normalize(V + uSunDir);
     float spec = pow(max(dot(N, H), 0.0), 64.0) * (0.15 + wet * 1.5) * diffuse;
-    color = albedo * (ambient + uSunColor * diffuse) + uSunColor * spec;
+    vec3 localSpec;
+    vec3 local = localLights(N, V, uWet * smoothstep(0.7, 0.95, N.y), localSpec);
+    color = albedo * (ambient + uSunColor * diffuse + local) + uSunColor * spec;
     if (wet > 0.0) {
       float fresnel = pow(1.0 - max(dot(N, V), 0.0), 5.0);
       color = mix(color, skyColor(reflect(-V, N)), fresnel * wet * 0.6);
     }
+    color += localSpec;
+    // Lit windows, shop interiors and lamp glass
+    color += toLinear(texture(uEmit, vUV).rgb) * uEmitK * 1.1;
   }
 
   // Exponential distance fog

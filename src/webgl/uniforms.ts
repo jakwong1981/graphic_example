@@ -4,6 +4,8 @@ export interface Uniforms {
   f(name: string, value: number): void;
   i(name: string, value: number): void;
   v3(name: string, value: ArrayLike<number>): void;
+  /** vec4 array uniform (name without [0]) */
+  v4v(name: string, value: Float32Array): void;
   m4(name: string, value: Float32Array): void;
 }
 
@@ -18,6 +20,7 @@ export function createUniforms(gl: WebGL2RenderingContext, program: WebGLProgram
     f: (name, value) => gl.uniform1f(loc(name), value),
     i: (name, value) => gl.uniform1i(loc(name), value),
     v3: (name, value) => gl.uniform3f(loc(name), value[0], value[1], value[2]),
+    v4v: (name, value) => gl.uniform4fv(loc(name), value),
     m4: (name, value) => gl.uniformMatrix4fv(loc(name), false, value),
   };
 }

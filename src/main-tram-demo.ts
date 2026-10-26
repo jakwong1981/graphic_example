@@ -1,15 +1,16 @@
 // Hong Kong tram #80 on a sakura-lined tram street: UV-textured tram, stops, bell, road traffic, petals, weather
 import { perspective, lookAt } from './math/matrix';
-import { hkTram } from './models/hk-tram';
+import { hkTram, TRAM } from './models/hk-tram';
 import { hkTaxi } from './models/hk-taxi';
 import { kmbBus } from './models/kmb-bus';
 import { car } from './models/car';
 import { drawAtlas } from './models/atlas';
 import { V3, add, sub, scale, cross, norm, qAxisAngle, qRotate, modelMatrix } from './sim/math';
-import { paintCityTexture } from './sim/city-textures';
+import { paintCityMaterial } from './sim/city-textures';
 import { ParticlePool } from './sim/particles';
 import { WEATHER, WeatherName, blendWeather, cloneWeather, Rain } from './sim/weather';
-import { SceneRenderer, Camera, Drawable } from './sim/scene-renderer';
+import { SceneRenderer, Camera, Drawable, SceneLights, MAX_LAMPS, MAX_SPOTS } from './sim/scene-renderer';
+import { applyTimeOfDay, formatHour, TimeOfDay } from './sim/daynight';
 import { exportGlb } from './image3d/glb-export';
 import { buildStreet, STREET_HALF, TRACKS, LANES, RAIL_TOP } from './tram/street';
 
@@ -28,7 +29,9 @@ const street = buildStreet();
 const statics: Drawable[] = [];
 let seed = 11;
 for (const [material, data] of street.batches) {
-  const d = renderer.mesh(data, renderer.tileTexture(paintCityTexture(material, seed++)));
+  const { color, emit } = paintCityMaterial(material, seed++);
+  const d = renderer.mesh(data, renderer.tileTexture(color));
+  if (emit) d.emitTexture = renderer.tileTexture(emit);
   d.emissive = material === 'signs';
   statics.push(d);
 }
@@ -68,14 +71,15 @@ const wrapX = (x: number) => ((((x + STREET_HALF) % PERIOD) + PERIOD) % PERIOD) 
 const offsetMatrices = OFFSETS.map((dx) => new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, dx, 0, 0, 1]));
 
 // ---- Road traffic: taxis, buses and cars with simple car-following ----
+// lightY / halfW: headlight height and half spacing in metres
 const fleet = [
-  { model: renderer.model(hkTaxi), scale: 2.0, len: 5 },
-  { model: renderer.model(hkTaxi), scale: 2.0, len: 5 },
-  { model: renderer.model({ ...hkTaxi, paint: '#2e9e44' }), scale: 2.0, len: 5 },
-  { model: renderer.model(kmbBus), scale: 1, len: 12.3 },
-  { model: renderer.model({ ...car, paint: '#f2f2f2' }), scale: 1.9, len: 4.6 },
-  { model: renderer.model({ ...car, paint: '#1b1b1f' }), scale: 1.9, len: 4.6 },
-  { model: renderer.model({ ...car, paint: '#1f4fa8' }), scale: 1.9, len: 4.6 },
+  { model: renderer.model(hkTaxi), scale: 2.0, len: 5, lightY: 0.7, halfW: 0.65 },
+  { model: renderer.model(hkTaxi), scale: 2.0, len: 5, lightY: 0.7, halfW: 0.65 },
+  { model: renderer.model({ ...hkTaxi, paint: '#2e9e44' }), scale: 2.0, len: 5, lightY: 0.7, halfW: 0.65 },
+  { model: renderer.model(kmbBus), scale: 1, len: 12.3, lightY: 0.9, halfW: 0.95 },
+  { model: renderer.model({ ...car, paint: '#f2f2f2' }), scale: 1.9, len: 4.6, lightY: 0.65, halfW: 0.65 },
+  { model: renderer.model({ ...car, paint: '#1b1b1f' }), scale: 1.9, len: 4.6, lightY: 0.65, halfW: 0.65 },
+  { model: renderer.model({ ...car, paint: '#1f4fa8' }), scale: 1.9, len: 4.6, lightY: 0.65, halfW: 0.65 },
 ];
 interface Vehicle { lane: 0 | 1; x: number; v: number; vmax: number; kind: number }
 const vehicles: Vehicle[] = [];
@@ -185,7 +189,6 @@ $('bell').addEventListener('click', () => { bell.start(); bell.ring(); });
 // ---- Weather ----
 let weatherName: WeatherName = 'sunny';
 const weather = cloneWeather(WEATHER.sunny);
-const sunDir = norm([0.35, 0.75, 0.45]);
 let flash = 0;
 let nextLightning = 6;
 function setWeather(name: WeatherName) {
@@ -194,6 +197,134 @@ function setWeather(name: WeatherName) {
 }
 document.querySelectorAll<HTMLButtonElement>('[data-weather]').forEach((b) => b.addEventListener('click', () => setWeather(b.dataset.weather as WeatherName)));
 const rain = new Rain(4000);
+
+// ---- Time of day: 24 h slider, presets, optional running clock ----
+const lit = cloneWeather(WEATHER.sunny); // weather after the time of day is applied (what gets rendered)
+const timeUi = { hour: $<HTMLInputElement>('hour'), flow: $<HTMLInputElement>('timeflow'), label: $('hour-val') };
+let hour = Number(timeUi.hour.value);
+let hourGoal: number | null = null;
+const HOURS_PER_SECOND = 0.1; // running clock: a day in 4 minutes
+function showHour() {
+  timeUi.label.textContent = formatHour(hour);
+  timeUi.hour.value = String(hour);
+  timeUi.hour.setAttribute('aria-valuetext', formatHour(hour));
+}
+function goToHour(h: number) {
+  hourGoal = h;
+}
+timeUi.hour.addEventListener('input', () => { hourGoal = null; hour = Number(timeUi.hour.value); showHour(); });
+document.querySelectorAll<HTMLButtonElement>('[data-hour]').forEach((b) => b.addEventListener('click', () => goToHour(Number(b.dataset.hour))));
+function updateClock(dt: number) {
+  if (hourGoal !== null) {
+    // glide to the preset along the shorter way round the clock
+    let d = hourGoal - hour;
+    d -= 24 * Math.round(d / 24);
+    const step = Math.sign(d) * Math.min(Math.abs(d), Math.max(0.5, Math.abs(d) * 2.5) * dt);
+    hour += step;
+    if (Math.abs(d) < 0.01) { hour = hourGoal; hourGoal = null; }
+  } else if (timeUi.flow.checked) {
+    hour += HOURS_PER_SECOND * dt;
+  }
+  hour = ((hour % 24) + 24) % 24;
+  showHour();
+}
+showHour();
+
+// ---- Night lights: street lamps, shop lighting, headlights (auto / on / off) ----
+type HeadlightMode = 'auto' | 'on' | 'off';
+let headlightMode: HeadlightMode = 'auto';
+function setHeadlights(m: HeadlightMode) {
+  headlightMode = m;
+  document.querySelectorAll<HTMLButtonElement>('[data-headlights]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.headlights === m)));
+}
+document.querySelectorAll<HTMLButtonElement>('[data-headlights]').forEach((b) => b.addEventListener('click', () => setHeadlights(b.dataset.headlights as HeadlightMode)));
+
+const lights: SceneLights = {
+  emit: 0,
+  lamps: new Float32Array(MAX_LAMPS * 4),
+  lampCount: 0,
+  lampColor: [1.0, 0.74, 0.45],
+  spotPos: new Float32Array(MAX_SPOTS * 4),
+  spotDir: new Float32Array(MAX_SPOTS * 4),
+  spotCount: 0,
+  spotColor: [1.0, 0.95, 0.85],
+};
+const LAMP_POWER = 4;
+const HEADLIGHT_POWER = 3;
+let lampK = 0; // street lamps (they switch on at dusk on a light sensor)
+let headK = 0; // vehicle headlights
+const lampGlow = new ParticlePool(glCtx, renderer.particle, 512, 0, 0);
+const headGlow = new ParticlePool(glCtx, renderer.particle, 512, 0, 0);
+const tailGlow = new ParticlePool(glCtx, renderer.particle, 512, 0, 0);
+const glow = (pool: ParticlePool, p: V3, size: number, alpha: number) => pool.emit(p, [0, 0, 0], { life: 1, size0: size, size1: size, alpha });
+const smooth01 = (a: number, b: number, x: number) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+
+// Light sources nearest the camera; the last ones fade out before they are dropped, so nothing pops
+function nearest<T extends { d: number }>(list: T[], max: number): { item: T; fade: number }[] {
+  list.sort((a, b) => a.d - b.d);
+  const cut = list[max]?.d ?? Infinity;
+  return list.slice(0, max).map((item) => ({ item, fade: Math.min(1, Math.max(0, (cut - item.d) / 20)) }));
+}
+
+interface Headlight { front: V3; dir: number; halfW: number; back: V3; d: number }
+let lightsInit = false;
+function updateLights(dt: number, tod: TimeOfDay, eye: V3) {
+  const k = lightsInit ? 1 - Math.exp(-dt * 3) : 1; // no fade-in on page load
+  lightsInit = true;
+  lampK += ((tod.night > 0.25 ? 1 : 0) - lampK) * k;
+  const autoOn = tod.night > 0.3 || weather.rain > 0.5; // HK drivers switch on in heavy rain too
+  const headOn = headlightMode === 'on' || (headlightMode === 'auto' && autoOn);
+  headK += ((headOn ? 1 : 0) - headK) * k;
+  lights.emit = Math.max(smooth01(0.1, 0.6, tod.night), weather.rain * 0.25);
+
+  // Street lamps: nearest copy of each lamp to the camera
+  lampGlow.count = 0;
+  const lampList = street.lamps.map(([x, y, z]) => {
+    const wx = eye[0] + wrapX(x - eye[0]);
+    return { p: [wx, y, z] as V3, d: Math.hypot(wx - eye[0], y - eye[1], z - eye[2]) };
+  });
+  lights.lampCount = 0;
+  if (lampK > 0.01) {
+    nearest(lampList, MAX_LAMPS).forEach(({ item, fade }, i) => {
+      lights.lamps.set([...item.p, LAMP_POWER * lampK * fade], i * 4);
+      lights.lampCount = i + 1;
+    });
+    for (const dx of OFFSETS) for (const [x, y, z] of street.lamps) glow(lampGlow, [x + dx, y, z], 1.8, 0.9 * lampK);
+  }
+
+  // Headlights of the trams and the road traffic
+  headGlow.count = 0;
+  tailGlow.count = 0;
+  lights.spotCount = 0;
+  if (headK < 0.01) return;
+  const heads: Headlight[] = [];
+  const addVehicle = (x: number, z: number, dir: number, halfLen: number, y: number, halfW: number) => {
+    for (const dx of OFFSETS) {
+      const front: V3 = [x + dx + dir * halfLen, y, z];
+      heads.push({ front, back: [x + dx - dir * halfLen, y, z], dir, halfW, d: Math.hypot(front[0] - eye[0], y - eye[1], z - eye[2]) });
+    }
+  };
+  for (const t of trams) addVehicle(t.x, t.z, t.dir, TRAM.L + 0.1, RAIL_TOP + 1.0, 0);
+  if (ui.traffic.checked) {
+    for (const v of vehicles) {
+      const f = fleet[v.kind];
+      addVehicle(v.x, LANES[v.lane], v.lane === 0 ? 1 : -1, f.len / 2, f.lightY, f.halfW);
+    }
+  }
+  for (const h of heads) {
+    if (h.d > 400) continue;
+    const pairs = h.halfW > 0 ? [-h.halfW, h.halfW] : [0];
+    for (const o of pairs) glow(headGlow, [h.front[0], h.front[1], h.front[2] + o], h.halfW > 0 ? 0.7 : 0.9, headK);
+    for (const o of h.halfW > 0 ? pairs : [-0.7, 0.7]) glow(tailGlow, [h.back[0], h.back[1], h.back[2] + o], 0.45, 0.8 * headK);
+  }
+  nearest(heads, MAX_SPOTS).forEach(({ item, fade }, i) => {
+    const p = item.front;
+    lights.spotPos.set([p[0] + item.dir * 0.2, p[1], p[2], HEADLIGHT_POWER * headK * fade], i * 4);
+    const d = norm([item.dir, -0.1, 0]);
+    lights.spotDir.set([...d, 0], i * 4);
+    lights.spotCount = i + 1;
+  });
+}
 
 // ---- Sakura petals ----
 const petals = new ParticlePool(glCtx, renderer.particle, 4000, 0, 0);
@@ -294,6 +425,8 @@ addEventListener('keydown', (e) => {
   if (e.code === 'Digit1') setWeather('sunny');
   if (e.code === 'Digit2') setWeather('cloudy');
   if (e.code === 'Digit3') setWeather('rain');
+  if (e.code === 'KeyN') goToHour(nightNow > 0.5 ? 12 : 22);
+  if (e.code === 'KeyH') setHeadlights(headlightMode === 'auto' ? 'on' : headlightMode === 'on' ? 'off' : 'auto');
 });
 $<HTMLButtonElement>('export').addEventListener('click', async (e) => {
   const btn = e.currentTarget as HTMLButtonElement;
@@ -319,7 +452,7 @@ addEventListener('resize', resize);
 resize();
 
 // ---- HUD ----
-const hud = { spd: $('spd'), state: $('state'), next: $('next'), pos: $('pos') };
+const hud = { spd: $('spd'), state: $('state'), next: $('next'), pos: $('pos'), clock: $('clock') };
 let hudTimer = 0;
 function updateHud(dt: number) {
   if ((hudTimer -= dt) > 0) return;
@@ -329,6 +462,7 @@ function updateHud(dt: number) {
   hud.state.textContent = main.dwell > 0 ? `停站 At stop ${Math.ceil(main.dwell)}s` : main.v > 0.3 ? '行駛中 Running' : '停車 Stopped';
   hud.next.textContent = `${stop.name} (${Math.round(dist)} m)`;
   hud.pos.textContent = `${Math.round(main.x)} m`;
+  hud.clock.textContent = `${formatHour(hour)} ${headK > 0.5 ? '💡' : ''}`;
 }
 
 // ---- Main loop ----
@@ -337,6 +471,7 @@ glCtx.enable(glCtx.CULL_FACE);
 let time = 0;
 let last = performance.now();
 let prevEye: V3 | null = null;
+let nightNow = 0;
 function frame(now: number) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
@@ -358,7 +493,12 @@ function frame(now: number) {
   prevEye = [...cam.pos];
   if (weather.rain > 0.02) rain.update(dt, cam.pos, Math.hypot(...camVel) > 200 ? [0, 0, 0] : camVel);
 
-  const state = { cam, weather, sunDir, time, flash, height: canvas.height };
+  updateClock(dt);
+  const tod = applyTimeOfDay(lit, weather, hour);
+  nightNow = tod.night;
+  updateLights(dt, tod, cam.pos);
+
+  const state = { cam, weather: lit, sunDir: tod.lightDir, time, flash, height: canvas.height, lights, night: tod.night };
   glCtx.viewport(0, 0, canvas.width, canvas.height);
   glCtx.clear(glCtx.COLOR_BUFFER_BIT | glCtx.DEPTH_BUFFER_BIT);
   renderer.drawSky(state);
@@ -372,6 +512,9 @@ function frame(now: number) {
       for (const dx of OFFSETS) renderer.draw(f.model, modelMatrix([v.x + dx, 0, LANES[v.lane]], qAxisAngle([0, 1, 0], heading), f.scale));
     }
   }
+  renderer.drawGlows(state, lampGlow, [1.0, 0.78, 0.5]);
+  renderer.drawGlows(state, headGlow, [1.0, 0.97, 0.88]);
+  renderer.drawGlows(state, tailGlow, [0.9, 0.06, 0.04]);
   renderer.drawPetals(state, petals);
   renderer.drawRain(state, rain.lines, weather.rain);
   updateHud(dt);
