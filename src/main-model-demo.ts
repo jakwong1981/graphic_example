@@ -17,6 +17,7 @@ import { ModelDef } from './models/types';
 const GLB_FILES: Record<string, string> = {
   glb: 'icecream-van.glb',
   meshy: 'Meshy_AI_Red_Mecha_Zaku_1031004947_image-to-3d-texture.glb',
+  tree: 'cherry-blossom-tree.glb',
 };
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
