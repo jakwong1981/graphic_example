@@ -26,6 +26,7 @@ const KERB = 11; // building frontage
 export interface Street {
   batches: Map<MaterialName, MeshData>;
   blossoms: [number, number, number, number][]; // canopy x, y, z, radius: petals fall from here
+  trees: { x: number; z: number; side: number; scale: number }[]; // planting spots (for replacement tree models)
   lamps: V3[]; // light position under each street lamp head
   beacons: V3[]; // flashing amber globes at the zebra crossings
 }
@@ -310,9 +311,12 @@ export function buildStreet(seed = 1904): Street {
 
   // ---- Sakura trees on both pavements (positions chosen before the buildings, see treeXs) ----
   const blossoms: Street['blossoms'] = [];
+  const trees: Street['trees'] = [];
   for (const [side, xs] of treeXs) {
     for (const x of xs) {
-      blossoms.push(buildSakura(b, x, side * 9.2, 0.15, { scale: range(0.9, 1.08), roadDir: side, rnd }));
+      const scale = range(0.9, 1.08);
+      blossoms.push(buildSakura(b, x, side * 9.2, 0.15, { scale, roadDir: side, rnd }));
+      trees.push({ x, z: side * 9.2, side, scale });
     }
   }
   // ---- Street lamps: random spacing along both kerbs, clear of the trees and the tram poles ----
@@ -344,5 +348,5 @@ export function buildStreet(seed = 1904): Street {
   }
 
   b.color = [1, 1, 1];
-  return { batches: b.finish(), blossoms, lamps, beacons };
+  return { batches: b.finish(), blossoms, trees, lamps, beacons };
 }

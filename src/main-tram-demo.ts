@@ -33,12 +33,55 @@ const renderer = new SceneRenderer(glCtx);
 const street = buildStreet();
 const statics: Drawable[] = [];
 let seed = 11;
+const proceduralTree: Drawable[] = []; // trunk and blossom of the built-in sakura (hidden once the model loads)
 for (const [material, data] of street.batches) {
   const { color, emit } = paintCityMaterial(material, seed++);
   const d = renderer.mesh(data, renderer.tileTexture(color));
   if (emit) d.emitTexture = renderer.tileTexture(emit);
   d.emissive = material === 'signs';
   statics.push(d);
+  if (material === 'bark' || material === 'blossom') proceduralTree.push(d);
+}
+
+// ---- Cherry blossom trees: the Meshy AI tree (reduced to 39k triangles by scripts/decimate-glb.ts) replaces the
+// built-in ones at every planting spot. Until it has loaded, or if it fails, the built-in trees stay.
+const TREE_HEIGHT = 7; // metres, like the built-in trees
+const TREE_DEPTH = 0.5; // squash across the pavement so the canopy stays clear of the facades and the bus lane
+let treeModel: { drawable: Drawable; matrices: Float32Array[] } | null = null;
+loadGlb('./cherry-blossom-tree.glb')
+  .then((m) => {
+    if (!m.baseColorImage) throw new Error('no texture');
+    const drawable = renderer.mesh(m, renderer.tileTexture(m.baseColorImage));
+    drawable.doubleSided = true;
+    const s0 = TREE_HEIGHT / (m.max[1] - m.min[1]);
+    const cx = (m.min[0] + m.max[0]) / 2, cz = (m.min[2] + m.max[2]) / 2;
+    // T(spot) * R_y(0 or pi) * S(sx, sy, sz) * T(-canopy centre, -bottom): canopy centred over the planting spot
+    const matrices = street.trees.map((t, i) => {
+      const s = s0 * t.scale;
+      const flip = i % 2 ? -1 : 1; // half of them turned round, so they do not all look the same
+      const sx = s * flip, sy = s, sz = s * TREE_DEPTH * flip;
+      return new Float32Array([
+        sx, 0, 0, 0,
+        0, sy, 0, 0,
+        0, 0, sz, 0,
+        t.x - cx * sx, 0.15 - m.min[1] * sy, t.z - cz * sz, 1,
+      ]);
+    });
+    treeModel = { drawable, matrices };
+    for (const d of proceduralTree) statics.splice(statics.indexOf(d), 1);
+  })
+  .catch((e) => console.warn('Cherry blossom tree model not loaded, keeping the built-in trees:', e));
+const treeOffset = new Float32Array(16);
+/** Draws each tree once, in the copy of the street nearest the camera */
+function drawTrees(camX: number) {
+  if (!treeModel) return;
+  for (const M of treeModel.matrices) {
+    const rel = wrapX(M[12] - camX); // trunk x relative to the camera, in the nearest copy
+    if (Math.abs(rel) > 260) continue;
+    treeOffset.set(M);
+    treeOffset[12] = camX + rel;
+    renderer.draw(treeModel.drawable, treeOffset);
+  }
 }
 
 // Trams: #80 in its red advert livery runs eastbound; a green tram runs the other way
@@ -872,6 +915,7 @@ function frame(now: number) {
   renderer.drawSky(state);
   renderer.beginWorld(state);
   for (const m of offsetMatrices) for (const d of statics) renderer.draw(d, m);
+  drawTrees(cam.pos[0]);
   for (const dx of OFFSETS) for (const t of trams) {
     renderer.draw(t.model, tramMatrix(t, dx));
     renderer.draw(wiperModel, wiperMatrix(t, dx));
