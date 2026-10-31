@@ -9,7 +9,7 @@
     #glcanvas { display: block; width: 100vw; height: 100vh; cursor: grab; }
     #glcanvas:active { cursor: grabbing; }
     .panel { position: absolute; background: rgba(17, 24, 39, 0.8); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 12px; padding: 12px 14px; backdrop-filter: blur(8px); }
-    #side { top: 12px; left: 12px; width: 270px; max-height: calc(100vh - 48px); overflow-y: auto; font-size: 13px; }
+    #side { top: 12px; left: 12px; width: 270px; max-height: calc(100vh - 248px); overflow-y: auto; font-size: 13px; }
     #side h1 { font-size: 15px; margin: 0 0 2px; display: flex; gap: 8px; align-items: center; }
     #side h1 .badge { background: #dc2626; border-radius: 8px; padding: 2px 8px; font-weight: 900; }
     #side h2 { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: #9ca3af; margin: 14px 0 6px; }
@@ -28,6 +28,10 @@
     #music iframe { display: block; width: 100%; aspect-ratio: 16 / 9; border: 0; border-radius: 8px; margin-top: 8px; }
     #music .title { color: #d1d5db; margin: 0; line-height: 1.4; }
     #help { bottom: 12px; right: 12px; font-size: 12px; line-height: 1.6; }
+    #radar { left: 12px; bottom: 12px; width: 196px; padding: 8px 8px 6px; }
+    #radar canvas { display: block; width: 180px; height: 180px; border-radius: 8px; background: #070d18; }
+    #radar-label { margin: 5px 0 0; font-size: 11px; line-height: 1.35; text-align: center; color: #e5e7eb; font-variant-numeric: tabular-nums; }
+    #radar .sub { text-align: center; margin: 0; }
     kbd { background: rgba(255,255,255,0.15); border-radius: 4px; padding: 0 5px; font-family: inherit; }
     a { color: #fca5a5; }
   </style>
@@ -124,6 +128,12 @@
       <button id="music-play" class="wide" aria-pressed="false">▶ 播放音樂 Play music (M)</button>
     </div>
     <div id="music-player"></div>
+  </div>
+
+  <div id="radar" class="panel" aria-label="2D radar">
+    <canvas id="radar-view" width="180" height="180"></canvas>
+    <p id="radar-label">電車 #80</p>
+    <p class="sub">北 N · 雷達 140 m</p>
   </div>
 
   <div id="help" class="panel">

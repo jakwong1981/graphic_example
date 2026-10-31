@@ -20,7 +20,6 @@ import { buildStreet, STREET_HALF, TRACKS, LANES, RAIL_TOP, CROSSINGS, ZEBRA_HAL
 import { parseGlb, flatten } from './zaku/gltf-scene';
 import { Pedestrians, Mover, buildPersonMesh } from './tram/pedestrians';
 import { FlyingCar, FlyInput, NO_INPUT } from './tram/flying-car';
-import { paintCar, paintCarAtlas } from './tram/car-paint';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const canvas = $<HTMLCanvasElement>('glcanvas');
@@ -350,9 +349,10 @@ function footstep(v: Vehicle, f: FleetEntry, leg: 0 | 1, eye: V3) {
   shake = Math.max(shake, 0.22 * m.amount * Math.max(0, 1 - d / 70));
 }
 
-// ---- Flying car: the Meshy AI red sports car (reduced to 40k triangles in public/flying-car.glb by
-// scripts/decimate-glb.ts) held up by four lift jets under the body. It hovers over the street until the flying
-// camera (F) hands you the controls: W/S or arrows to drive, A/D or arrows to steer, Space/E up, Shift/Q down.
+// ---- Flying car: the Meshy AI red sports car (public/flying-car.glb). The scan's texture is a mosaic of tiny
+// islands, so scripts/decimate-glb.ts bakes those colours onto the vertices (about 70k triangles) instead of
+// keeping the atlas. Four lift jets hold it up. It hovers until the flying camera (F) hands you the controls:
+// W/S or arrows to drive, A/D or arrows to steer, Space/E up, Shift/Q down. The nose points along -x.
 const CAR_LENGTH = 4.6; // metres, about a Tesla Model S
 const CAR_MODEL_YAW = Math.PI; // the Meshy model's nose points along -x: turn it to +x
 interface CarModel { parts: Drawable[]; shadow: Walker; scale: number; offset: V3; jets: V3[]; heads: V3[]; tails: V3[] }
@@ -372,16 +372,12 @@ heightUi.slider.value = String(flyer.hold);
 showHeight();
 loadGlb('./flying-car.glb')
   .then((m) => {
-    // smoothed surface; the body panels get their own UV layout and a painted atlas (lights glow after dark);
-    // dark tyres / rims / cockpit in vertex colours (see car-paint.ts)
-    const white = solidTexture('#fff');
-    const { body: paintwork, trim } = paintCar(m, m.min, m.max);
-    const atlas = paintCarAtlas();
-    const body = renderer.mesh(paintwork, renderer.tileTexture(atlas.color));
-    body.emitTexture = renderer.tileTexture(atlas.emit);
+    // Baked colours are linear; the world shader treats vertex colour as sRGB.
+    const src = m.vertexColors;
+    const colors = src ? new Float32Array(src.length) : undefined;
+    if (src && colors) for (let i = 0; i < src.length; i++) colors[i] = Math.pow(Math.max(0, src[i]), 1 / 2.2);
+    const body = renderer.mesh({ positions: m.positions, normals: m.normals, uvs: m.uvs, colors, indices: m.indices }, solidTexture('#fff'));
     body.doubleSided = true;
-    const trimDrawable = renderer.mesh(trim, white);
-    trimDrawable.doubleSided = true;
     const s = CAR_LENGTH / (m.max[0] - m.min[0]);
     const W = (m.max[2] - m.min[2]) * s, H = (m.max[1] - m.min[1]) * s;
     flyer.resize([CAR_LENGTH / 2, H / 2, W / 2]);
@@ -393,7 +389,7 @@ loadGlb('./flying-car.glb')
     for (const sx of [-1, 1]) for (const sz of [-1, 1]) jets.push([sx * 0.3 * L, 0.15, sz * 0.3 * W]);
     const heads: V3[] = [-1, 1].map((sz) => [L / 2 - 0.1, H * 0.42, sz * 0.33 * W]);
     const tails: V3[] = [-1, 1].map((sz) => [-L / 2 + 0.08, H * 0.5, sz * 0.36 * W]);
-    carModel = { parts: [body, trimDrawable], shadow, scale: s, offset: [-(m.min[0] + m.max[0]) / 2, -m.min[1], -(m.min[2] + m.max[2]) / 2], jets, heads, tails };
+    carModel = { parts: [body], shadow, scale: s, offset: [-(m.min[0] + m.max[0]) / 2, -m.min[1], -(m.min[2] + m.max[2]) / 2], jets, heads, tails };
   })
   .catch((e) => console.warn('Flying car model not loaded:', e));
 const flames = new ParticlePool(glCtx, renderer.particle, 2400, 3.0, 3.0); // drag, then the hot gas rises
@@ -1218,7 +1214,129 @@ function frame(now: number) {
     });
   }
   updateHud(dt);
+  drawRadar();
   requestAnimationFrame(frame);
+}
+
+// ---- 2D radar: top-down, north up, centred on the vehicle the camera is following ----
+const radarCanvas = document.getElementById('radar-view') as HTMLCanvasElement | null;
+const radarLabel = document.getElementById('radar-label');
+const radarCtx = radarCanvas?.getContext('2d') ?? null;
+const RADAR_RANGE = 140; // metres from the selected vehicle to the edge of the map
+if (radarCanvas && radarCtx) {
+  const dpr = Math.min(devicePixelRatio, 2);
+  radarCanvas.width = Math.round(180 * dpr);
+  radarCanvas.height = Math.round(180 * dpr);
+  radarCtx.scale(dpr, dpr);
+}
+/** The vehicle the current camera follows */
+function selectedCraft(): { name: string; x: number; z: number; yaw: number } {
+  if (mode === 'fly') return { name: '飛天車', x: flyer.pos[0], z: flyer.pos[2], yaw: flyer.yaw };
+  if (mode === 'mecha') {
+    const v = [...mechaNames.keys()][mechaIndex];
+    if (v) {
+      const m = fleet[v.kind].mecha!;
+      const side = Math.sign(LANES[v.lane]);
+      const dir = v.lane === 0 ? 1 : -1;
+      return {
+        name: mechaNames.get(v) ?? '機械人',
+        x: v.x,
+        z: side * (Math.abs(LANES[v.lane]) + m.zOffset - m.inward),
+        yaw: dir > 0 ? 0 : Math.PI,
+      };
+    }
+  }
+  return { name: '電車 #80', x: main.x, z: main.z, yaw: main.dir > 0 ? 0 : Math.PI };
+}
+function drawRadar() {
+  if (!radarCanvas || !radarCtx || !radarLabel) return;
+  const ctx = radarCtx;
+  const W = 180, H = 180, cx = W / 2, cy = H / 2;
+  const scale = (W / 2 - 8) / RADAR_RANGE;
+  const sel = selectedCraft();
+  // world (x east, z south) -> canvas, centred on the selected vehicle. North (-z) is up.
+  const pt = (x: number, z: number): [number, number] | null => {
+    const dx = wrapX(x - sel.x), dz = z - sel.z;
+    if (Math.abs(dx) > RADAR_RANGE || Math.abs(dz) > RADAR_RANGE) return null;
+    return [cx + dx * scale, cy + dz * scale];
+  };
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#070d18';
+  ctx.fillRect(0, 0, W, H);
+  // range rings and cross
+  ctx.strokeStyle = 'rgba(148, 163, 184, 0.28)';
+  ctx.lineWidth = 1;
+  for (const m of [RADAR_RANGE * 0.5, RADAR_RANGE]) {
+    ctx.beginPath();
+    ctx.arc(cx, cy, m * scale, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.beginPath();
+  ctx.moveTo(cx, 8); ctx.lineTo(cx, H - 8);
+  ctx.moveTo(8, cy); ctx.lineTo(W - 8, cy);
+  ctx.stroke();
+  ctx.fillStyle = '#93c5fd';
+  ctx.font = '11px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('N', cx, 14);
+  // road and pavements, as bands of constant z
+  const band = (z0: number, z1: number, color: string) => {
+    const y0 = cy + (z0 - sel.z) * scale, y1 = cy + (z1 - sel.z) * scale;
+    ctx.fillStyle = color;
+    ctx.fillRect(0, Math.min(y0, y1), W, Math.abs(y1 - y0));
+  };
+  band(-11, 11, '#1f2937');
+  band(-7, 7, '#374151');
+  // HSBC plot, in the copy of the street nearest the vehicle
+  {
+    const hx = HSBC_SITE.halfX, hz = HSBC_SITE.halfZ;
+    const x = sel.x + wrapX(HSBC_SITE.x - sel.x);
+    const a = pt(x - hx, HSBC_SITE.z - hz), b = pt(x + hx, HSBC_SITE.z + hz);
+    if (a && b) {
+      ctx.fillStyle = 'rgba(56, 189, 248, 0.85)';
+      ctx.fillRect(Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.abs(b[0] - a[0]), Math.abs(b[1] - a[1]));
+    }
+  }
+  const dot = (x: number, z: number, color: string, r: number) => {
+    const p = pt(x, z);
+    if (!p) return;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(p[0], p[1], r, 0, Math.PI * 2);
+    ctx.fill();
+  };
+  const followingTram = mode !== 'fly' && mode !== 'mecha';
+  for (const t of trams) {
+    if (followingTram && t === main) continue; // the followed tram is the heading mark at the centre
+    dot(t.x, t.z, t === main ? '#f87171' : '#4ade80', 3);
+  }
+  if (ui.traffic.checked) {
+    for (const v of vehicles) {
+      if (fleet[v.kind].mecha) continue;
+      dot(v.x, LANES[v.lane], '#d1d5db', 2);
+    }
+  }
+  for (const v of mechaNames.keys()) {
+    if (mode === 'mecha' && v === [...mechaNames.keys()][mechaIndex]) continue;
+    const m = fleet[v.kind].mecha!;
+    const side = Math.sign(LANES[v.lane]);
+    dot(v.x, side * (Math.abs(LANES[v.lane]) + m.zOffset - m.inward), '#fbbf24', 3.5);
+  }
+  if (mode !== 'fly') dot(flyer.pos[0], flyer.pos[2], '#fb7185', 3);
+  // selected vehicle: a triangle pointing along its nose (+x at yaw 0)
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(Math.atan2(-Math.sin(sel.yaw), Math.cos(sel.yaw)));
+  ctx.fillStyle = mode === 'fly' ? '#fb7185' : mode === 'mecha' ? '#fbbf24' : '#f87171';
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(9, 0); ctx.lineTo(-6, 5); ctx.lineTo(-3.5, 0); ctx.lineTo(-6, -5); ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+  const h = mode === 'fly' ? ` · ${Math.round(flyer.pos[1])} m` : '';
+  radarLabel.textContent = `${sel.name}  ${Math.round(sel.x)}, ${Math.round(sel.z)} m${h}`;
 }
 const IDENTITY = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 requestAnimationFrame(frame);

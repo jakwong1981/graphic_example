@@ -19,9 +19,11 @@ export const WIRE_Y = RAIL_TOP + POLE_TIP[1];
 // Zebra crossings (x of the centre line); the trees and lamps keep clear of them
 export const CROSSINGS = [-180, -60, 60, 180];
 export const ZEBRA_HALF = 2; // half width along the street
-// Site of the HSBC Main Building model (loaded at runtime, see main-tram-demo.ts): north of the street, just west of
-// the Bank of China Tower as in Central. Background towers are kept off this rectangle.
-export const HSBC_SITE = { x: -30, z: -140, halfX: 52, halfZ: 40 };
+// Site of the HSBC Main Building model (loaded at runtime, see main-tram-demo.ts): just behind the north
+// shophouses and west of the Bank of China Tower, as in Central. The street-facing masts point at the tram
+// road. Background towers are kept off this plot, so the facade reads from the street instead of sitting
+// a block back inside the tower band.
+export const HSBC_SITE = { x: -30, z: -68, halfX: 48, halfZ: 32 };
 export const KERB_EDGE = 7; // |z| of the kerb line (pavements run to the frontage at 11)
 const ROAD = 7; // road half width
 const KERB = 11; // building frontage
@@ -273,7 +275,15 @@ export function buildStreet(seed = 1904): Street {
     const h = range(40, 170) * (1 - Math.abs(cz) / 600);
     tint(pick(PASTEL));
     // the random numbers are drawn either way, so the rest of the skyline is unchanged by the HSBC site
-    const onSite = (hx: number, hz: number) => Math.abs(cx - HSBC_SITE.x) < HSBC_SITE.halfX + hx && Math.abs(cz - HSBC_SITE.z) < HSBC_SITE.halfZ + hz;
+    const onSite = (hx: number, hz: number) => {
+      const dx = Math.abs(cx - HSBC_SITE.x);
+      if (dx >= HSBC_SITE.halfX + hx && dx >= 42 + hx) return false;
+      const z0 = cz - hz, z1 = cz + hz;
+      const plot = dx < HSBC_SITE.halfX + hx && z1 > HSBC_SITE.z - HSBC_SITE.halfZ && z0 < HSBC_SITE.z + HSBC_SITE.halfZ;
+      // also the approach from the shophouses to the street face, so the bank is not walled in
+      const approach = dx < 42 + hx && z0 < -KERB - 4 && z1 > HSBC_SITE.z && z0 < HSBC_SITE.z + HSBC_SITE.halfZ + 10;
+      return plot || approach;
+    };
     if (rnd() < 0.25) {
       const r = range(10, 16), seg = pick([6, 8, 24]), mat = pick(['glass', 'office'] as MaterialName[]), rot = rnd();
       if (!onSite(r, r)) {
@@ -369,6 +379,33 @@ export function buildStreet(seed = 1904): Street {
       lamps.push(streetLamp(x, side));
     }
   }
+
+  // The near skyline stops around |z| = 260, while the flying car can travel out to 700 m.
+  // Continue the towers across that stretch. The harbour side (north, z < 0) has no hill, so it runs
+  // out to the flight limit; the south side stops short of the Peak.
+  b.color = [1, 1, 1];
+  const outerTower = (side: number, zLo: number, zHi: number, hLo: number, hHi: number) => {
+    const cx = range(-S, S);
+    const cz = side * range(zLo, zHi);
+    const fall = Math.min(1, (Math.abs(cz) - 240) / 520);
+    const h = range(hLo, hHi) * (1 - 0.48 * fall);
+    tint(pick(PASTEL));
+    const onSite = (hx: number, hz: number) => Math.abs(cx - HSBC_SITE.x) < HSBC_SITE.halfX + hx && Math.abs(cz - HSBC_SITE.z) < HSBC_SITE.halfZ + hz;
+    if (rnd() < 0.22) {
+      const r = range(9, 15), seg = pick([6, 8, 24]), mat = pick(['glass', 'office'] as MaterialName[]), rot = rnd();
+      if (onSite(r, r)) return;
+      b.prism(cx, cz, r, 0, h, seg, mat, 'roof', { collide: false, rot });
+      solid(cx - r * 0.9, cx + r * 0.9, h, cz - r * 0.9, cz + r * 0.9);
+    } else {
+      const hw = range(7, 15), hd = range(7, 15);
+      const mat = pick(['residential', 'residential2', 'office', 'glass'] as MaterialName[]);
+      if (onSite(hw, hd)) return;
+      b.box(cx - hw, cx + hw, 0, h, cz - hd, cz + hd, mat, 'roof', false);
+      solid(cx - hw, cx + hw, h, cz - hd, cz + hd);
+    }
+  };
+  for (let i = 0; i < 300; i++) outerTower(-1, 248, 680, 36, 150);
+  for (let i = 0; i < 90; i++) outerTower(1, 248, 360, 28, 80);
 
   b.color = [1, 1, 1];
   return { batches: b.finish(), blossoms, trees, lamps, beacons, solids };
