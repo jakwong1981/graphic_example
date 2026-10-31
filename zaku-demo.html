@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MS-06S 夏亞專用渣古 II - Char's Zaku II</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #1c1e24; font-family: -apple-system, "PingFang HK", "Noto Sans TC", sans-serif; color: #f3f4f6; }
+    #glcanvas { display: block; width: 100vw; height: 100vh; cursor: grab; }
+    #glcanvas:active { cursor: grabbing; }
+    .panel { position: absolute; background: rgba(17, 24, 39, 0.8); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 12px; padding: 12px 14px; backdrop-filter: blur(8px); }
+    #side { top: 12px; left: 12px; width: 260px; font-size: 13px; }
+    #side h1 { font-size: 15px; margin: 0 0 2px; display: flex; gap: 8px; align-items: center; }
+    #side h1 .badge { background: #b91c1c; border-radius: 8px; padding: 2px 8px; font-weight: 900; }
+    #side h2 { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: #9ca3af; margin: 14px 0 6px; }
+    .sub { color: #9ca3af; font-size: 12px; margin: 0; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    button { background: rgba(255,255,255,0.07); color: inherit; border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; padding: 6px 8px; cursor: pointer; font-size: 12px; }
+    button[aria-pressed="true"] { background: #b91c1c; border-color: #f87171; }
+    button:disabled { opacity: 0.5; cursor: default; }
+    button.wide { grid-column: span 2; }
+    label.row { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 6px 0; }
+    input[type=range] { width: 120px; accent-color: #ef4444; }
+    a { color: #fca5a5; }
+  </style>
+</head>
+<body>
+  <canvas id="glcanvas" aria-label="Char's Zaku II 3D view"></canvas>
+
+  <aside id="side" class="panel">
+    <h1><span class="badge">MS-06S</span> 夏亞專用渣古 II</h1>
+    <p class="sub">Char Aznable's Zaku II · Meshy AI 圖片轉 3D 模型</p>
+    <p class="sub"><a href="./">&larr; Home</a> · 拖曳旋轉，滾輪縮放 Drag / wheel</p>
+    <p class="sub" id="status" role="status" aria-live="polite">Loading…</p>
+
+
+    <h2>鏡頭 View</h2>
+    <div class="grid">
+      <button data-view="front">正面 Front</button>
+      <button data-view="three">斜側 3/4</button>
+      <button data-view="side">側面 Side</button>
+      <button data-view="back">背面 Back</button>
+    </div>
+    <label class="row"><span>自動旋轉 Auto-rotate</span><input type="checkbox" id="spin" checked></label>
+    <label class="row"><span>燈光角度 Light</span><input type="range" id="light" min="0" max="360" value="42" aria-label="Key light angle"></label>
+
+  </aside>
+
+  <script type="module" src="/src/main-zaku-demo.ts"></script>
+</body>
+</html>

@@ -24,6 +24,9 @@
     #hud { top: 12px; right: 12px; font-variant-numeric: tabular-nums; min-width: 200px; font-size: 13px; }
     #hud div { display: flex; justify-content: space-between; gap: 14px; line-height: 1.6; }
     #hud b { color: #fca5a5; }
+    #music { bottom: 64px; right: 12px; width: 260px; font-size: 12px; }
+    #music iframe { display: block; width: 100%; aspect-ratio: 16 / 9; border: 0; border-radius: 8px; margin-top: 8px; }
+    #music .title { color: #d1d5db; margin: 0; line-height: 1.4; }
     #help { bottom: 12px; right: 12px; font-size: 12px; line-height: 1.6; }
     kbd { background: rgba(255,255,255,0.15); border-radius: 4px; padding: 0 5px; font-family: inherit; }
     a { color: #fca5a5; }
@@ -45,6 +48,7 @@
       <button data-cam="side" aria-pressed="false">側面彩繪 Side</button>
       <button data-cam="top" aria-pressed="false">鳥瞰 Top</button>
       <button data-cam="ride" class="wide" aria-pressed="false">🚋 上層車頭座位 Upper deck (V)</button>
+      <button data-cam="mecha" class="wide" aria-pressed="false">🤖 跟拍機械人 Follow a mecha</button>
       <button data-cam="driver" class="wide" aria-pressed="false">🧑‍✈️ 司機位 Driver's cab (C)</button>
     </div>
 
@@ -61,6 +65,7 @@
     <label class="row"><span>櫻花飄落 Falling petals</span><input type="checkbox" id="petals" checked></label>
     <label class="row"><span>車輛 Road traffic</span><input type="checkbox" id="traffic" checked></label>
     <label class="row"><span>路人 Pedestrians</span><input type="checkbox" id="peds" checked></label>
+    <p class="sub">🤖 巨型機械人：渣古同機械人 Mecha Figure 自己行、精神感應 Mk-II 迎面而來，經過街燈會慢慢避開 Mechas: <span id="mecha-status">…</span></p>
     <div class="grid">
       <button data-weather="sunny" aria-pressed="true">☀️ 晴天</button>
       <button data-weather="cloudy" aria-pressed="false">☁️ 陰天</button>
@@ -109,8 +114,17 @@
     <div><span>時間 Time</span><b id="clock">10:00</b></div>
   </div>
 
+  <!-- Music: the official YouTube embedded player (the audio is streamed by YouTube, not downloaded) -->
+  <div id="music" class="panel">
+    <p class="title">🎵 《迷人的危险》 Ghost (王琳凯) &amp; 姚晓棠<br><span class="sub">YouTube · WOW MUSIC</span></p>
+    <div class="grid" style="margin-top:8px">
+      <button id="music-play" class="wide" aria-pressed="false">▶ 播放音樂 Play music (M)</button>
+    </div>
+    <div id="music-player"></div>
+  </div>
+
   <div id="help" class="panel">
-    <kbd>Space</kbd> 叮叮 &nbsp; <kbd>V</kbd> 上層座位 &nbsp; <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 天氣 &nbsp; <kbd>P</kbd> 暫停 / 開車 &nbsp; <kbd>N</kbd> 日 / 夜 &nbsp; <kbd>H</kbd> 車頭燈 &nbsp; <kbd>C</kbd> 司機位 &nbsp; <kbd>W</kbd> 水撥
+    <kbd>Space</kbd> 叮叮 &nbsp; <kbd>V</kbd> 上層座位 &nbsp; <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 天氣 &nbsp; <kbd>P</kbd> 暫停 / 開車 &nbsp; <kbd>N</kbd> 日 / 夜 &nbsp; <kbd>H</kbd> 車頭燈 &nbsp; <kbd>C</kbd> 司機位 &nbsp; <kbd>W</kbd> 水撥 &nbsp; <kbd>M</kbd> 音樂
   </div>
 
   <script type="module" src="/src/main-tram-demo.ts"></script>

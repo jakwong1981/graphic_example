@@ -8,6 +8,8 @@ import particleFrag from '../shaders/sim-particle.frag.glsl?raw';
 import rainVert from '../shaders/sim-rain.vert.glsl?raw';
 import rainFrag from '../shaders/sim-rain.frag.glsl?raw';
 import crowdVert from '../shaders/crowd.vert.glsl?raw';
+import walkerVert from '../shaders/walker.vert.glsl?raw';
+import walkerShadowFrag from '../shaders/walker-shadow.frag.glsl?raw';
 import { createProgram } from '../webgl/shader-program';
 import { createMesh, Mesh, MeshData } from '../webgl/mesh';
 import { createUniforms, Uniforms } from '../webgl/uniforms';
@@ -45,6 +47,14 @@ export interface CrowdMesh { positions: Float32Array; normals: Float32Array; par
 export interface Crowd { instances: Float32Array; count: number; draw(n: number): void }
 export const CROWD_LAYOUT: [string, number][] = [['iPose', 4], ['iAnim', 4], ['iShirt', 3], ['iPants', 3], ['iSkin', 4], ['iUmb', 3]];
 export const CROWD_STRIDE = CROWD_LAYOUT.reduce((s, [, n]) => s + n, 0);
+
+// A rigid mesh with two procedurally rigged legs (see walker.vert.glsl)
+export interface WalkerMesh { positions: Float32Array; normals: Float32Array; uvs: Float32Array; indices: Uint32Array; rig: Float32Array }
+export interface Walker { vao: WebGLVertexArrayObject; count: number; texture: WebGLTexture }
+export interface WalkerPose {
+  hipR: number[]; hipL: number[]; kneeR: number[]; kneeL: number[]; // pivots in model space
+  hipAngleR: number; hipAngleL: number; kneeAngleR: number; kneeAngleL: number;
+}
 
 export const MAX_LAMPS = 16;
 export const MAX_SPOTS = 12;
@@ -91,6 +101,10 @@ export class SceneRenderer {
   private crowdProgram: WebGLProgram | null = null;
   private uc: Uniforms | null = null;
   private white: WebGLTexture | null = null;
+  private walkerProgram: WebGLProgram | null = null;
+  private uwk: Uniforms | null = null;
+  private walkerShadowProgram: WebGLProgram | null = null;
+  private uws: Uniforms | null = null;
 
   constructor(private gl: WebGL2RenderingContext) {
     this.world = createProgram(gl, worldVert, worldFrag);
@@ -267,6 +281,119 @@ export class SceneRenderer {
         gl.bindVertexArray(null);
       },
     };
+  }
+
+  walker(mesh: WalkerMesh, texture: WebGLTexture): Walker {
+    const gl = this.gl;
+    if (!this.walkerProgram) {
+      this.walkerProgram = createProgram(gl, walkerVert, worldFrag);
+      this.uwk = createUniforms(gl, this.walkerProgram);
+      this.walkerShadowProgram = createProgram(gl, walkerVert, walkerShadowFrag);
+      this.uws = createUniforms(gl, this.walkerShadowProgram);
+      // both programs read the same vertex buffers through one VAO, so give them the same attribute slots
+      for (const [i, name] of ['aPosition', 'aNormal', 'aUV', 'aColor', 'aRig'].entries()) {
+        for (const p of [this.walkerProgram, this.walkerShadowProgram]) gl.bindAttribLocation(p, i, name);
+      }
+      for (const p of [this.walkerProgram, this.walkerShadowProgram]) gl.linkProgram(p);
+      this.uwk = createUniforms(gl, this.walkerProgram);
+      this.uws = createUniforms(gl, this.walkerShadowProgram);
+    }
+    const prog = this.walkerProgram;
+    const vao = gl.createVertexArray()!;
+    gl.bindVertexArray(vao);
+    const attrib = (name: string, data: Float32Array, size: number) => {
+      const loc = gl.getAttribLocation(prog, name);
+      if (loc < 0) return;
+      gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+      gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
+    };
+    attrib('aPosition', mesh.positions, 3);
+    attrib('aNormal', mesh.normals, 3);
+    attrib('aUV', mesh.uvs, 2);
+    attrib('aRig', mesh.rig, 2);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl.createBuffer());
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, mesh.indices, gl.STATIC_DRAW);
+    gl.bindVertexArray(null);
+    return { vao, count: mesh.indices.length, texture };
+  }
+
+  private walkerPose(u: Uniforms, model: Float32Array, pose: WalkerPose) {
+    u.m4('uModel', model);
+    u.v3('uHipR', pose.hipR);
+    u.v3('uHipL', pose.hipL);
+    u.v3('uKneeR', pose.kneeR);
+    u.v3('uKneeL', pose.kneeL);
+    u.f('uHipAngleR', pose.hipAngleR);
+    u.f('uHipAngleL', pose.hipAngleL);
+    u.f('uKneeAngleR', pose.kneeAngleR);
+    u.f('uKneeAngleL', pose.kneeAngleL);
+  }
+
+  drawWalker(f: FrameState, w: Walker, model: Float32Array, pose: WalkerPose) {
+    const gl = this.gl;
+    const u = this.uwk!;
+    gl.useProgram(this.walkerProgram);
+    this.worldUniforms(u, f);
+    u.i('uMaterial', 0);
+    u.i('uShadow', 0);
+    this.walkerPose(u, model, pose);
+    const colorLoc = gl.getAttribLocation(this.walkerProgram!, 'aColor');
+    if (colorLoc >= 0) gl.vertexAttrib3f(colorLoc, 1, 1, 1); // untinted
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.black);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, w.texture);
+    gl.disable(gl.CULL_FACE); // scanned mesh, double-sided material
+    gl.bindVertexArray(w.vao);
+    gl.drawElements(gl.TRIANGLES, w.count, gl.UNSIGNED_INT, 0);
+    gl.bindVertexArray(null);
+    gl.enable(gl.CULL_FACE);
+    gl.useProgram(this.world);
+  }
+
+  /**
+   * Ground shadows of the walkers, all in one pass: each pixel is darkened at most once (stencil), drawn after the
+   * opaque scene with depth test on so buildings and vehicles in front still hide it. `toward` points at the light.
+   */
+  drawWalkerShadows(f: FrameState, items: { walker: Walker; model: Float32Array; pose: WalkerPose }[], toward: number[], alpha: number) {
+    if (!items.length || alpha < 0.01 || !this.walkerShadowProgram) return;
+    const gl = this.gl;
+    const u = this.uws!;
+    // light travelling down; a very low sun or moon would stretch shadows across the street, so keep it 25 deg up
+    let d = [-toward[0], Math.min(-0.42, -toward[1]), -toward[2]];
+    const l = Math.hypot(d[0], d[1], d[2]);
+    d = d.map((c) => c / l);
+    gl.useProgram(this.walkerShadowProgram);
+    u.m4('uView', f.cam.view);
+    u.m4('uProj', f.cam.proj);
+    u.v3('uCamPos', f.cam.pos);
+    u.f('uFogDensity', f.weather.fogDensity);
+    u.f('uShadowAlpha', alpha);
+    u.i('uShadow', 1);
+    u.v3('uShadowDir', d);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.depthMask(false);
+    gl.disable(gl.CULL_FACE);
+    gl.enable(gl.POLYGON_OFFSET_FILL);
+    gl.polygonOffset(-2, -4);
+    gl.enable(gl.STENCIL_TEST);
+    gl.stencilFunc(gl.EQUAL, 0, 0xff);
+    gl.stencilOp(gl.KEEP, gl.KEEP, gl.INCR);
+    for (const it of items) {
+      this.walkerPose(u, it.model, it.pose);
+      gl.bindVertexArray(it.walker.vao);
+      gl.drawElements(gl.TRIANGLES, it.walker.count, gl.UNSIGNED_INT, 0);
+    }
+    gl.bindVertexArray(null);
+    gl.disable(gl.STENCIL_TEST);
+    gl.disable(gl.POLYGON_OFFSET_FILL);
+    gl.enable(gl.CULL_FACE);
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
+    gl.useProgram(this.world);
   }
 
   drawCrowd(f: FrameState, crowd: Crowd) {

@@ -13,7 +13,11 @@ import { kmbBus } from './models/kmb-bus';
 import { hkTram } from './models/hk-tram';
 import { ModelDef } from './models/types';
 
-const MODEL_URL = './icecream-van.glb';
+// GLB files in public/ selectable in the model list
+const GLB_FILES: Record<string, string> = {
+  glb: 'icecream-van.glb',
+  meshy: 'Meshy_AI_Red_Mecha_Zaku_1031004947_image-to-3d-texture.glb',
+};
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const canvas = $<HTMLCanvasElement>('glcanvas');
@@ -60,12 +64,12 @@ function replace(newMesh: Mesh, newTexture: WebGLTexture | null) {
   texture = newTexture;
 }
 
-function showGlb() {
+function showGlb(file: string) {
   const id = ++loadId;
   atlasSection.hidden = true;
   status.textContent = 'Loading...';
   stats.textContent = '';
-  loadGlb(MODEL_URL, (loaded, total) => {
+  loadGlb(`./${file}`, (loaded, total) => {
     if (id !== loadId) return;
     const mb = (n: number) => (n / 1048576).toFixed(1);
     status.textContent = total ? `Loading ${mb(loaded)} / ${mb(total)} MB` : `Loading ${mb(loaded)} MB`;
@@ -76,7 +80,7 @@ function showGlb() {
       replace(createMesh(glCtx, program, model), model.baseColorImage ? createTexture(glCtx, model.baseColorImage) : null);
       baseColorFactor = model.baseColorFactor;
       fitTo(model.min, model.max);
-      status.textContent = 'Loaded icecream-van.glb';
+      status.textContent = `Loaded ${file}`;
       stats.textContent =
         `${model.vertexCount.toLocaleString()} vertices, ${model.triangleCount.toLocaleString()} triangles, ` +
         `${model.indices instanceof Uint32Array ? '32' : '16'}-bit indices, ` +
@@ -108,7 +112,7 @@ function showAtlasModel(def: ModelDef) {
 }
 
 function selectModel() {
-  if (modelSelect.value === 'glb') showGlb();
+  if (GLB_FILES[modelSelect.value]) showGlb(GLB_FILES[modelSelect.value]);
   else showAtlasModel(modelSelect.value === 'tram' ? hkTram : kmbBus);
 }
 modelSelect.addEventListener('change', selectModel);

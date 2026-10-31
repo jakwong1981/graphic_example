@@ -9,18 +9,19 @@ import { V3, add, sub, scale, cross, norm, qAxisAngle, qRotate, qMul, modelMatri
 import { paintCityMaterial } from './sim/city-textures';
 import { ParticlePool } from './sim/particles';
 import { WEATHER, WeatherName, blendWeather, cloneWeather, Rain } from './sim/weather';
-import { SceneRenderer, Camera, Drawable, SceneLights, MAX_LAMPS, MAX_SPOTS } from './sim/scene-renderer';
+import { SceneRenderer, Camera, Drawable, SceneLights, MAX_LAMPS, MAX_SPOTS, Walker } from './sim/scene-renderer';
 import { applyTimeOfDay, formatHour, TimeOfDay } from './sim/daynight';
 import { Windscreen } from './sim/windscreen';
 import { Wiper, WiperMode, wiperSpeed, buildWiperMesh, WIPER, WIPER_PIVOT_LOCAL, LOWER_PANE, UPPER_PANE } from './tram/wiper';
 import { exportGlb } from './image3d/glb-export';
 import { loadGlb } from './loaders/glb';
+import { rigMecha, walkPose, strideRate, MechaRig } from './tram/mecha-walker';
 import { buildStreet, STREET_HALF, TRACKS, LANES, RAIL_TOP, CROSSINGS, ZEBRA_HALF } from './tram/street';
 import { Pedestrians, Mover, buildPersonMesh } from './tram/pedestrians';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const canvas = $<HTMLCanvasElement>('glcanvas');
-const gl = canvas.getContext('webgl2', { antialias: true });
+const gl = canvas.getContext('webgl2', { antialias: true, stencil: true }); // stencil: mecha shadows
 if (!gl) {
   alert('WebGL2 not supported');
   throw new Error('WebGL2 not supported');
@@ -75,8 +76,18 @@ const wrapX = (x: number) => ((((x + STREET_HALF) % PERIOD) + PERIOD) % PERIOD) 
 const offsetMatrices = OFFSETS.map((dx) => new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, dx, 0, 0, 1]));
 
 // ---- Road traffic: taxis, buses and cars with simple car-following ----
-// lightY / halfW: headlight height and half spacing in metres
-const fleet = [
+// lightY / halfW: headlight height and half spacing in metres; `mecha` marks a walking giant (drawn separately)
+interface Mecha {
+  rig: MechaRig; walker: Walker; phase: number; amount: number; zOffset: number; role: MechaRole;
+  headHalf: number; // half width of the head (m), for lamp clearance
+  inward: number; // current sidestep towards the road centre (m)
+  turn: number; // body yaw while sidestepping (radians)
+  eyeColor: number[];
+  eyeGlow: ParticlePool; // one sprite at the eye, additive
+  stepCos: [number, number]; // last cos(phase) of each leg, to catch the moment a foot comes down
+}
+interface FleetEntry { model: Drawable; scale: number; len: number; lightY: number; halfW: number; mecha?: Mecha }
+const fleet: FleetEntry[] = [
   { model: renderer.model(hkTaxi), scale: 2.0, len: 5, lightY: 0.7, halfW: 0.65 },
   { model: renderer.model(hkTaxi), scale: 2.0, len: 5, lightY: 0.7, halfW: 0.65 },
   { model: renderer.model({ ...hkTaxi, paint: '#2e9e44' }), scale: 2.0, len: 5, lightY: 0.7, halfW: 0.65 },
@@ -98,13 +109,203 @@ loadGlb('./icecream-van.glb')
     const texture = m.baseColorImage ? renderer.tileTexture(m.baseColorImage) : renderer.tileTexture(document.createElement('canvas'));
     const model = renderer.mesh(m, texture);
     model.doubleSided = true;
-    const kind = fleet.push({ model: { ...model, data: m }, scale: 1, len: m.max[0] - m.min[0], lightY: 0.8, halfW: 0.8 }) - 1;
+    const kind = fleet.push({ model, scale: 1, len: m.max[0] - m.min[0], lightY: 0.8, halfW: 0.8 }) - 1;
     for (const lane of [0, 1]) {
       const v = vehicles.find((c) => c.lane === lane && fleet[c.kind].len < 6); // a car-sized slot
       if (v) { v.kind = kind; v.vmax = Math.min(v.vmax, 10); } // vans are in no hurry
     }
   })
   .catch((e) => console.warn('Ice cream van not loaded:', e));
+
+// ---- Walking mechas: Meshy AI image-to-3D scans with automatically rigged legs (see tram/mecha-walker.ts) ----
+// Each one takes a car's place in a traffic lane (the cars behind queue up). They are sized to fit between the
+// tram and the kerb, and walk a little towards the pavement.
+//  - walk:     the Zaku and the Mecha Figure walk down the eastbound lane at their own pace (trams and cars pass)
+//  - oncoming: the Psycho Mk-II walks towards the #80 tram in the westbound lane; once it has passed, it comes
+//              round again from further up the street
+// Both ease towards the road centre to keep their heads clear of the street lamp arms (see avoidLamps).
+type MechaRole = 'walk' | 'oncoming';
+const MECHAS = [
+  // start: metres ahead of the #80 tram at load time (negative: behind it, in view of the default street camera)
+  // eye: colour of the eye glow (linear RGB)
+  { url: './Meshy_AI_Red_Mecha_Zaku_1031004947_image-to-3d-texture.glb', name: '渣古 Zaku', height: 8.5, lane: 0 as const, role: 'walk' as MechaRole, start: 45, eye: [1.0, 0.1, 0.45] },
+  { url: './Meshy_AI_gundam_mecha_model_1031011724_image-to-3d-texture.glb', name: '精神感應 Mk-II', height: 8, lane: 1 as const, role: 'oncoming' as MechaRole, start: 160, eye: [0.25, 1.0, 0.45] },
+  { url: './Meshy_AI_Mecha_Figure_1031021918_image-to-3d-texture.glb', name: '機械人 Mecha Figure', height: 8.5, lane: 0 as const, role: 'walk' as MechaRole, start: -30, eye: [0.3, 0.75, 1.0] },
+];
+const ONCOMING_START = 160; // the Psycho Mk-II comes round again this far ahead of the tram
+const ONCOMING_END = -70; // and is sent round again once it is this far behind
+const MECHA_SPEED = 3.2; // m/s: a brisk giant's walk
+const mechaStatus = $('mecha-status');
+const mechaNames = new Map<Vehicle, string>();
+async function loadMecha(def: (typeof MECHAS)[number]) {
+  const res = await fetch(def.url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const rig = rigMecha(await res.arrayBuffer());
+  if (!rig.image) throw new Error('no base colour texture');
+  const bmp = await createImageBitmap(rig.image, { imageOrientation: 'none', premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
+  const walker = renderer.walker(rig.mesh, renderer.tileTexture(bmp));
+  bmp.close();
+  const scale = def.height / (rig.max[1] - rig.min[1]);
+  const width = (rig.max[0] - rig.min[0]) * scale;
+  const len = (rig.max[2] - rig.min[2]) * scale; // its depth: walking along x, the model's z becomes the length
+  // Keep its inner side clear of the tram (tram side at |z| = 3.1)
+  const zOffset = Math.max(0, 3.25 + width / 2 - Math.abs(LANES[def.lane]));
+  // Head width: the x extent of the vertices in the top 12% of the model (the head and antenna)
+  let hx0 = Infinity, hx1 = -Infinity;
+  const P = rig.mesh.positions, yTop = rig.max[1] - 0.12 * (rig.max[1] - rig.min[1]);
+  for (let i = 0; i < P.length; i += 3) if (P[i + 1] > yTop) { hx0 = Math.min(hx0, P[i]); hx1 = Math.max(hx1, P[i]); }
+  const headHalf = Number.isFinite(hx0) ? ((hx1 - hx0) / 2) * scale : 0.7;
+  const mecha: Mecha = {
+    rig, walker, phase: 0, amount: 0, zOffset, role: def.role, headHalf, inward: 0, turn: 0,
+    eyeColor: def.eye, eyeGlow: new ParticlePool(glCtx, renderer.particle, 1, 0, 0), stepCos: [1, 1],
+  };
+  const kind = fleet.push({ model: fleet[0].model, scale, len, lightY: 0, halfW: 0, mecha }) - 1;
+  let v = vehicles.find((c) => c.lane === def.lane && !fleet[c.kind].mecha && fleet[c.kind].len < 6);
+  if (!v) vehicles.push((v = { lane: def.lane, x: 0, v: 0, vmax: 0, kind }));
+  v.kind = kind;
+  v.vmax = MECHA_SPEED;
+  v.v = MECHA_SPEED;
+  v.x = wrapX(main.x + def.start);
+  // clear cars standing where it appears
+  for (const o of vehicles) if (o !== v && o.lane === v.lane && !fleet[o.kind].mecha && Math.abs(wrapX(o.x - v.x)) < 15) o.x = wrapX(v.x + (def.lane === 0 ? 30 : -30));
+  mechaNames.set(v, def.name);
+  return def.name;
+}
+// Load one after the other: each file is 75-120 MB
+(async () => {
+  const done: string[] = [];
+  for (const def of MECHAS) {
+    mechaStatus.textContent = `載入 Loading ${def.name}…`;
+    try { done.push(await loadMecha(def)); } catch (e) { console.warn(`${def.name} not loaded:`, e); }
+  }
+  mechaStatus.textContent = done.length ? `${done.join(' + ')} 行緊 walking` : '載入失敗 Not loaded';
+})();
+// ---- Mecha effects: ground shadows, eye glow, footstep dust / splashes and a little camera shake ----
+const dust = new ParticlePool(glCtx, renderer.particle, 1500, 1.4, 0.25);
+const noFlame = new ParticlePool(glCtx, renderer.particle, 1, 0, 0);
+let shake = 0; // camera shake amplitude (m), decays
+/** World matrix of a mecha this frame (the copy of the street nearest the camera) */
+function mechaMatrix(v: Vehicle, f: FleetEntry, near: number, drop: number): Float32Array {
+  const m = f.mecha!;
+  const { min, max } = m.rig;
+  const side = Math.sign(LANES[v.lane]);
+  const z = side * (Math.abs(LANES[v.lane]) + m.zOffset - m.inward);
+  // the model faces +z: face the direction of travel (+x eastbound, -x westbound), turned a little towards the
+  // road centre (-side in z) while sidestepping. yaw = atan2(facing x, facing z)
+  const dir = v.lane === 0 ? 1 : -1;
+  const yaw = Math.atan2(dir * Math.cos(m.turn), -side * Math.sin(m.turn));
+  const x = near + wrapX(v.x - near);
+  return modelMatrix([x, -drop * f.scale, z], qAxisAngle([0, 1, 0], yaw), f.scale, [-(min[0] + max[0]) / 2, -min[1], -(min[2] + max[2]) / 2]);
+}
+const xform = (M: Float32Array, p: number[]): V3 => [
+  M[0] * p[0] + M[4] * p[1] + M[8] * p[2] + M[12],
+  M[1] * p[0] + M[5] * p[1] + M[9] * p[2] + M[13],
+  M[2] * p[0] + M[6] * p[1] + M[10] * p[2] + M[14],
+];
+/** A foot has just come down: kick up dust (or spray in the rain) and shake the camera if it is close */
+function footstep(v: Vehicle, f: FleetEntry, leg: 0 | 1, eye: V3) {
+  const m = f.mecha!;
+  const M = mechaMatrix(v, f, eye[0], 0);
+  const hip = leg === 0 ? m.rig.pivots.hipR : m.rig.pivots.hipL;
+  const knee = leg === 0 ? m.rig.pivots.kneeR : m.rig.pivots.kneeL;
+  const foot = xform(M, [hip[0], m.rig.min[1], knee[2]]);
+  foot[1] = Math.abs(foot[2]) > 7 ? 0.2 : 0.05;
+  const wet = weather.rain;
+  const n = Math.round(22 * m.amount);
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const sp = 1.2 + Math.random() * 2.2;
+    const p: V3 = [foot[0] + Math.cos(a) * 0.8, foot[1] + 0.1, foot[2] + Math.sin(a) * 0.8];
+    if (wet > 0.3 && i % 2 === 0) {
+      // water thrown up from the wet road: brighter, quicker, falls back
+      dust.emit(p, [Math.cos(a) * sp * 1.3, 2.5 + Math.random() * 2, Math.sin(a) * sp * 1.3], { life: 0.7 + Math.random() * 0.3, size0: 0.25, size1: 0.6, alpha: 0.55, shade: 1.15 });
+    } else {
+      dust.emit(p, [Math.cos(a) * sp, 0.3 + Math.random() * 0.8, Math.sin(a) * sp], { life: 1.4 + Math.random() * 0.8, size0: 0.6, size1: 2.4 + Math.random(), alpha: 0.45 * (1 - wet * 0.6), shade: 0.72 + Math.random() * 0.1 });
+    }
+  }
+  const d = Math.hypot(foot[0] - eye[0], foot[1] - eye[1], foot[2] - eye[2]);
+  shake = Math.max(shake, 0.22 * m.amount * Math.max(0, 1 - d / 70));
+}
+
+// ---- Street lamp avoidance ----
+// The lamp arms reach over the kerb lanes at 7.5-7.9 m, about head height for the mechas. While passing a lamp a
+// mecha eases sideways towards the road centre until its head is clear of the arm, then eases back. That brings it
+// over the tram track on its side, so it only steps in when no tram is about to pass; otherwise it slows down and
+// waits before the lamp until the tram has gone by.
+const LAMP_ZONE = [4, 14]; // fully sidestepped within 4 m of a lamp, back in the lane beyond 14 m
+const lampXs = [-1, 1].map((side) => street.lamps.filter((l) => Math.sign(l[2]) === side));
+const smoothstep = (a: number, b: number, x: number) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+/** Updates the sidestep and returns the walking speed to aim for */
+function avoidLamps(v: Vehicle, m: Mecha, dt: number): number {
+  const dir = v.lane === 0 ? 1 : -1;
+  const side = Math.sign(LANES[v.lane]);
+  const lamps = lampXs[side < 0 ? 0 : 1];
+  // nearest lamp on this kerb, signed distance along the walking direction (> 0: still ahead)
+  let d = Infinity, head = 5.3;
+  for (const l of lamps) {
+    const dl = wrapX(l[0] - v.x) * dir;
+    if (Math.abs(dl) < Math.abs(d)) { d = dl; head = Math.abs(l[2]); }
+  }
+  const lane = Math.abs(LANES[v.lane]) + m.zOffset; // |z| of its path
+  const clear = head - 0.55 - m.headHalf - 0.3; // |z| at which the head passes inside the lamp housing
+  const need = Math.max(0, lane - clear);
+  let want = need * (1 - smoothstep(LAMP_ZONE[0], LAMP_ZONE[1], Math.abs(d)));
+  // Tram on the track it would step over, going the same way: is one inside the danger window?
+  let target = MECHA_SPEED;
+  const tramNear = trams.some((t) => {
+    if (t.z !== TRACKS[v.lane] || t.dir !== dir) return false;
+    const rel = wrapX(t.x - v.x) * dir; // > 0: the tram is ahead of the mecha
+    return rel > -70 && rel < TRAM.L + 8; // coming up from behind, or alongside
+  });
+  if (tramNear && m.inward < 0.2 && want > 0.2) {
+    want = 0; // do not step in front of the tram
+    if (d > 0) target = Math.min(target, Math.max(0, (d - LAMP_ZONE[1]) * 0.8)); // stop short of the lamp and wait
+  }
+  const prev = m.inward;
+  m.inward += (want - m.inward) * Math.min(1, dt * 1.6); // ease, never jump
+  // lean the body a little into the sidestep
+  const lateral = (m.inward - prev) / Math.max(dt, 1e-3);
+  m.turn += (Math.atan2(lateral, Math.max(0.5, v.v)) * 0.8 - m.turn) * Math.min(1, dt * 4);
+  return target;
+}
+
+// Mechas step over anything in the way: pedestrians see them coming and wait (see the movers list), and the cars
+// behind queue up.
+function updateMechas(dt: number) {
+  const L = 2 * STREET_HALF;
+  for (const v of vehicles) {
+    const f = fleet[v.kind];
+    if (!f.mecha) continue;
+    let target = avoidLamps(v, f.mecha, dt);
+    // Keep a safe distance behind another mecha in the same lane (e.g. one waiting at a lamp for a tram)
+    const dir = v.lane === 0 ? 1 : -1;
+    for (const o of vehicles) {
+      if (o === v || o.lane !== v.lane || !fleet[o.kind].mecha) continue;
+      const gap = wrapX(o.x - v.x) * dir - (fleet[o.kind].len + f.len) / 2;
+      if (gap > -2) target = Math.min(target, Math.max(0, (gap - 6) * 0.6));
+    }
+    v.v += (target - v.v) * Math.min(1, dt * (target < v.v ? 2.5 : 1.2));
+    if (f.mecha.role === 'oncoming' && wrapX(v.x - main.x) < ONCOMING_END) {
+      // it has walked past the tram: send it round to come towards the tram again
+      v.x = wrapX(main.x + ONCOMING_START);
+      f.mecha.inward = 0;
+    }
+    v.x += (v.lane === 0 ? 1 : -1) * v.v * dt;
+    if (v.x > STREET_HALF) v.x -= L;
+    if (v.x < -STREET_HALF) v.x += L;
+    const m = f.mecha;
+    const moving = v.v > 0.15;
+    m.amount += ((moving ? Math.min(1, v.v / 1.5) : 0) - m.amount) * Math.min(1, dt * 3); // legs settle when it stops
+    if (moving) m.phase += (v.v * dt) / strideRate(m.rig, f.scale);
+    // A foot comes down when its leg starts moving back (cos of its phase turns negative); the right leg is half
+    // a cycle behind the left (see walkPose)
+    for (const leg of [0, 1] as const) {
+      const c = Math.cos(m.phase + (leg === 0 ? Math.PI : 0));
+      if (m.stepCos[leg] >= 0 && c < 0 && m.amount > 0.3 && prevEye) footstep(v, f, leg, prevEye);
+      m.stepCos[leg] = c;
+    }
+  }
+}
 
 // ---- Zebra crossings: anything on the road gives way when someone is on or waiting at a crossing ----
 const peds = new Pedestrians(80);
@@ -134,6 +335,7 @@ function updateTraffic(dt: number) {
     const dir = lane === 0 ? 1 : -1; // keep left: eastbound on the -z side
     const list = vehicles.filter((v) => v.lane === lane).sort((a, b) => (a.x - b.x) * dir);
     list.forEach((v, i) => {
+      if (fleet[v.kind].mecha) return; // mechas walk on their own (walkMechas); cars treat them as the car ahead
       const ahead = list[(i + 1) % list.length];
       let gap = (ahead.x - v.x) * dir;
       if (gap <= 0) gap += L; // the leader follows the last car around the wrap
@@ -400,6 +602,7 @@ function updateLights(dt: number, tod: TimeOfDay, eye: V3) {
   if (ui.traffic.checked) {
     for (const v of vehicles) {
       const f = fleet[v.kind];
+      if (f.mecha) continue; // no headlights on a mecha
       addVehicle(v.x, LANES[v.lane], v.lane === 0 ? 1 : -1, f.len / 2, f.lightY, f.halfW);
     }
   }
@@ -440,7 +643,7 @@ function emitPetals(dt: number, near: V3) {
 }
 
 // ---- Camera: orbit around the #80 tram, presets, upper-deck ride view ----
-type CamMode = 'street' | 'classic' | 'front' | 'side' | 'top' | 'ride' | 'driver';
+type CamMode = 'street' | 'classic' | 'front' | 'side' | 'top' | 'ride' | 'driver' | 'mecha';
 type CabMode = 'ride' | 'driver';
 const isCab = (m: CamMode): m is CabMode => m === 'ride' || m === 'driver';
 const PRESETS: Record<Exclude<CamMode, CabMode>, { yaw: number; pitch: number; dist: number }> = {
@@ -449,12 +652,21 @@ const PRESETS: Record<Exclude<CamMode, CabMode>, { yaw: number; pitch: number; d
   front: { yaw: 0, pitch: 0.06, dist: 16 },
   side: { yaw: -Math.PI / 2, pitch: 0.12, dist: 7.8 }, // from the kerb-side pavement: doors and livery
   top: { yaw: 0.0, pitch: 1.2, dist: 60 },
+  mecha: { yaw: -0.7, pitch: 0.15, dist: 24 }, // 3/4 view of the mecha being followed
 };
+let mechaIndex = -1; // which mecha the mecha camera follows
 let mode: CamMode = 'street';
 const orbit = { ...PRESETS.street };
 let goal: typeof orbit | null = null;
 let rideLook = 0;
 function setCamera(m: CamMode) {
+  if (m === 'mecha') {
+    const list = [...mechaNames.keys()];
+    if (!list.length) return; // none loaded yet
+    mechaIndex = mode === 'mecha' ? (mechaIndex + 1) % list.length : 0;
+    const btn = document.querySelector<HTMLButtonElement>('[data-cam=mecha]');
+    if (btn) btn.textContent = `🤖 跟拍 ${mechaNames.get(list[mechaIndex])}（再撳換下一隻）`;
+  }
   mode = m;
   if (!isCab(m)) goal = { ...PRESETS[m] };
   rideLook = 0;
@@ -499,8 +711,24 @@ function camera(dt: number): Camera {
       orbit.dist += (goal.dist - orbit.dist) * k;
     }
     target = [main.x, 2.2, main.z];
+    const followed = mode === 'mecha' ? [...mechaNames.keys()][mechaIndex] : undefined;
+    if (followed) {
+      const f = fleet[followed.kind];
+      const m = f.mecha!;
+      const side = Math.sign(LANES[followed.lane]);
+      target = [followed.x, 0.5 * (m.rig.max[1] - m.rig.min[1]) * f.scale, side * (Math.abs(LANES[followed.lane]) + m.zOffset - m.inward)];
+      // walking east the camera sits ahead of it as for the tram; walking west, swing round to its front
+      if (goal && followed.lane === 1) goal.yaw = Math.PI - PRESETS.mecha.yaw;
+    }
     const c = Math.cos(orbit.pitch);
     eye = add(target, scale([c * Math.cos(orbit.yaw), Math.sin(orbit.pitch), c * Math.sin(orbit.yaw)], orbit.dist));
+  }
+  // footsteps of a nearby mecha shake the camera a little
+  shake *= Math.exp(-dt * 6);
+  if (shake > 0.005) {
+    const j: V3 = [(Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake];
+    eye = add(eye, j);
+    target = add(target, scale(j, 0.5));
   }
   const fwd = norm(sub(target, eye));
   const right = norm(cross(fwd, [0, 1, 0]));
@@ -510,6 +738,27 @@ function camera(dt: number): Camera {
     proj: perspective(FOV, aspect, isCab(mode) ? 0.1 : 0.3, 4000),
   };
 }
+
+// ---- Music: YouTube's embedded player, created on the first click (a user gesture, so it may start playing) ----
+const MUSIC_VIDEO = 'K5t-1v-IZ9k';
+const musicBtn = $<HTMLButtonElement>('music-play');
+const musicBox = $('music-player');
+function toggleMusic() {
+  const playing = musicBox.childElementCount > 0;
+  musicBox.replaceChildren();
+  if (!playing) {
+    const f = document.createElement('iframe');
+    // privacy-enhanced domain; loop by playing the same video as a one-item playlist
+    f.src = `https://www.youtube-nocookie.com/embed/${MUSIC_VIDEO}?autoplay=1&loop=1&playlist=${MUSIC_VIDEO}&rel=0`;
+    f.title = '迷人的危险 - YouTube';
+    f.allow = 'autoplay; encrypted-media; picture-in-picture';
+    f.referrerPolicy = 'strict-origin-when-cross-origin';
+    musicBox.append(f);
+  }
+  musicBtn.setAttribute('aria-pressed', String(!playing));
+  musicBtn.textContent = playing ? '▶ 播放音樂 Play music (M)' : '■ 停止音樂 Stop music (M)';
+}
+musicBtn.addEventListener('click', toggleMusic);
 
 // ---- Keys, export, resize ----
 addEventListener('keydown', (e) => {
@@ -522,6 +771,7 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyN') goToHour(nightNow > 0.5 ? 12 : 22);
   if (e.code === 'KeyC') setCamera(mode === 'driver' ? 'street' : 'driver');
   if (e.code === 'KeyW') setWipers(wiperMode === 'auto' ? 'on' : wiperMode === 'on' ? 'off' : 'auto');
+  if (e.code === 'KeyM') toggleMusic();
   if (e.code === 'KeyH') setHeadlights(headlightMode === 'auto' ? 'on' : headlightMode === 'on' ? 'off' : 'auto');
 });
 $<HTMLButtonElement>('export').addEventListener('click', async (e) => {
@@ -575,6 +825,7 @@ function frame(now: number) {
 
   for (const t of trams) updateTram(t, dt);
   if (ui.traffic.checked) updateTraffic(dt);
+  updateMechas(dt); // the mechas walk even with road traffic switched off
   blendWeather(weather, WEATHER[weatherName], 1 - Math.exp(-dt * 1.2));
   flash *= Math.exp(-dt * 9);
   if (weather.rain > 0.8 && (nextLightning -= dt) <= 0) {
@@ -585,6 +836,7 @@ function frame(now: number) {
   const cam = camera(dt);
   emitPetals(dt, cam.pos);
   petals.update(dt);
+  dust.update(dt);
   const camVel = prevEye ? scale(sub(cam.pos, prevEye), 1 / Math.max(dt, 1e-3)) : [0, 0, 0];
   prevEye = [...cam.pos];
   if (weather.rain > 0.02) rain.update(dt, cam.pos, Math.hypot(...camVel) > 200 ? [0, 0, 0] : camVel);
@@ -596,7 +848,10 @@ function frame(now: number) {
   updateWipers(dt);
   if (ui.peds.checked) {
     const movers: Mover[] = trams.map((t) => ({ x: t.x, dir: t.dir, v: t.v, half: TRAM.L + 0.1, decel: TRAM_DECEL }));
-    if (ui.traffic.checked) for (const v of vehicles) movers.push({ x: v.x, dir: v.lane === 0 ? 1 : -1, v: v.v, half: fleet[v.kind].len / 2, decel: CAR_DECEL });
+    for (const v of vehicles) {
+      const mecha = !!fleet[v.kind].mecha;
+      if (mecha || ui.traffic.checked) movers.push({ x: v.x, dir: v.lane === 0 ? 1 : -1, v: v.v, half: fleet[v.kind].len / 2, decel: mecha ? 0.05 : CAR_DECEL });
+    }
     const active = 0.3 + 0.7 * (1 - tod.night); // fewer people out late at night
     peds.update(dt, { movers, rain: weather.rain, active });
     crowd.count = peds.write(crowd.instances, cam.pos, active, weather.rain);
@@ -613,7 +868,7 @@ function frame(now: number) {
   const state = { cam, weather: lit, sunDir: tod.lightDir, time, flash, height: canvas.height, lights, night: tod.night };
   if (cab) windscreen.begin(canvas.width, canvas.height);
   glCtx.viewport(0, 0, canvas.width, canvas.height);
-  glCtx.clear(glCtx.COLOR_BUFFER_BIT | glCtx.DEPTH_BUFFER_BIT);
+  glCtx.clear(glCtx.COLOR_BUFFER_BIT | glCtx.DEPTH_BUFFER_BIT | glCtx.STENCIL_BUFFER_BIT);
   renderer.drawSky(state);
   renderer.beginWorld(state);
   for (const m of offsetMatrices) for (const d of statics) renderer.draw(d, m);
@@ -621,14 +876,38 @@ function frame(now: number) {
     renderer.draw(t.model, tramMatrix(t, dx));
     renderer.draw(wiperModel, wiperMatrix(t, dx));
   }
-  if (ui.traffic.checked) {
-    for (const v of vehicles) {
-      const f = fleet[v.kind];
-      const heading = v.lane === 0 ? 0 : Math.PI;
+  const mechaShadows: Parameters<typeof renderer.drawWalkerShadows>[1] = [];
+  for (const v of vehicles) {
+    const f = fleet[v.kind];
+    const heading = v.lane === 0 ? 0 : Math.PI;
+    if (!f.mecha && !ui.traffic.checked) continue;
+    {
+      if (f.mecha) {
+        // Millions of triangles: draw only the copy of the street nearest the camera
+        const m = f.mecha;
+        if (Math.abs(wrapX(v.x - cam.pos[0])) > 600) continue;
+        const { pose, drop } = walkPose(m.rig, m.phase, m.amount);
+        const matrix = mechaMatrix(v, f, cam.pos[0], drop);
+        renderer.drawWalker(state, m.walker, matrix, pose);
+        mechaShadows.push({ walker: m.walker, model: matrix, pose });
+        // eye glow: pulses slowly, brighter in the dark and in the rain
+        m.eyeGlow.count = 0;
+        const pulse = 0.75 + 0.25 * Math.sin(time * 2.6 + v.x);
+        m.eyeGlow.emit(xform(matrix, m.rig.eye), [0, 0, 0], { life: 1, size0: 1.1, size1: 1.1, alpha: pulse * (0.45 + 0.9 * tod.night + 0.3 * weather.rain) });
+        continue;
+      }
       for (const dx of OFFSETS) renderer.draw(f.model, modelMatrix([v.x + dx, 0, LANES[v.lane]], qAxisAngle([0, 1, 0], heading), f.scale));
     }
   }
   renderer.drawCrowd(state, crowd);
+  // Mecha shadows from the sun (or moon): darker in strong sunlight, faint under cloud, rain or at night
+  const sunLum = (lit.sunColor[0] + lit.sunColor[1] + lit.sunColor[2]) / 3;
+  renderer.drawWalkerShadows(state, mechaShadows, tod.lightDir, 0.12 + 0.48 * Math.min(1, sunLum / 1.2));
+  renderer.drawParticles(state, dust, noFlame);
+  for (const v of vehicles) {
+    const m = fleet[v.kind].mecha;
+    if (m && m.eyeGlow.count) renderer.drawGlows(state, m.eyeGlow, m.eyeColor);
+  }
   renderer.drawGlows(state, lampGlow, [1.0, 0.78, 0.5]);
   renderer.drawGlows(state, beaconGlow, [1.0, 0.6, 0.1]);
   renderer.drawGlows(state, headGlow, [1.0, 0.97, 0.88]);
