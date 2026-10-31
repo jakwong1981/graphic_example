@@ -46,6 +46,8 @@ interface Gltf {
 export interface GlbModel extends MeshData {
   normals: Float32Array;
   uvs: Float32Array;
+  /** COLOR_0 as linear RGB, when every primitive has it */
+  vertexColors: Float32Array | null;
   baseColorImage: ImageBitmap | null;
   baseColorFactor: [number, number, number, number];
   min: [number, number, number];
@@ -110,6 +112,8 @@ export async function loadGlb(url: string, onProgress?: (loaded: number, total: 
   const positions: number[] = [];
   const normals: number[] = [];
   const uvs: number[] = [];
+  const colors: number[] = [];
+  let allColored = true;
   const indices: number[] = [];
   let materialIndex: number | undefined;
 
@@ -125,6 +129,13 @@ export async function loadGlb(url: string, onProgress?: (loaded: number, total: 
         const nor = prim.attributes.NORMAL !== undefined ? read(prim.attributes.NORMAL) : null;
         const uv = prim.attributes.TEXCOORD_0 !== undefined ? read(prim.attributes.TEXCOORD_0) : null;
         const count = pos.length / 3;
+        // vertex colours: float VEC3 / VEC4 only (normalized integer colours are not handled)
+        const colAcc = prim.attributes.COLOR_0 !== undefined ? gltf.accessors[prim.attributes.COLOR_0] : null;
+        const col = colAcc && colAcc.componentType === 5126 ? read(prim.attributes.COLOR_0) : null;
+        if (col) {
+          const n = COMPONENTS[colAcc!.type];
+          for (let i = 0; i < count; i++) colors.push(col[i * n], col[i * n + 1], col[i * n + 2]);
+        } else allColored = false;
         for (let i = 0; i < count; i++) {
           positions.push(...transform(world, pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2], 1));
           const nv = nor ? transform(world, nor[i * 3], nor[i * 3 + 1], nor[i * 3 + 2], 0) : [0, 1, 0];
@@ -174,6 +185,7 @@ export async function loadGlb(url: string, onProgress?: (loaded: number, total: 
     positions: new Float32Array(positions),
     normals: new Float32Array(normals),
     uvs: new Float32Array(uvs),
+    vertexColors: allColored && colors.length ? new Float32Array(colors) : null,
     indices: vertexCount > 65535 ? new Uint32Array(indices) : new Uint16Array(indices),
     baseColorImage,
     baseColorFactor: [f[0], f[1], f[2], f[3]],

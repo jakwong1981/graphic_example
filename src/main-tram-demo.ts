@@ -16,8 +16,11 @@ import { Wiper, WiperMode, wiperSpeed, buildWiperMesh, WIPER, WIPER_PIVOT_LOCAL,
 import { exportGlb } from './image3d/glb-export';
 import { loadGlb } from './loaders/glb';
 import { rigMecha, walkPose, strideRate, MechaRig } from './tram/mecha-walker';
-import { buildStreet, STREET_HALF, TRACKS, LANES, RAIL_TOP, CROSSINGS, ZEBRA_HALF } from './tram/street';
+import { buildStreet, STREET_HALF, TRACKS, LANES, RAIL_TOP, CROSSINGS, ZEBRA_HALF, HSBC_SITE } from './tram/street';
+import { parseGlb, flatten } from './zaku/gltf-scene';
 import { Pedestrians, Mover, buildPersonMesh } from './tram/pedestrians';
+import { FlyingCar, FlyInput, NO_INPUT } from './tram/flying-car';
+import { paintCar, paintCarAtlas } from './tram/car-paint';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const canvas = $<HTMLCanvasElement>('glcanvas');
@@ -71,6 +74,83 @@ loadGlb('./cherry-blossom-tree.glb')
     for (const d of proceduralTree) statics.splice(statics.indexOf(d), 1);
   })
   .catch((e) => console.warn('Cherry blossom tree model not loaded, keeping the built-in trees:', e));
+// ---- HSBC Main Building (public/hsbc.glb): a landmark beside the Bank of China Tower, at the same scale ----
+// The scene's BOC is a 0.82 scale model (300 m to the mast tips against the real 367 m), so the real 179 m HSBC
+// building becomes about 146 m. Lit like the rest of the city (sun, sky, fog, wet streets), with lit floors behind
+// the glass after dark, a glowing sign, and a ground shadow cast with the mecha shadow pass.
+const HSBC_HEIGHT = 179 * (300 / 367);
+interface Landmark { parts: Drawable[]; shadow: Walker; scale: number; offset: V3 }
+let hsbc: Landmark | null = null;
+const solidTexture = (css: string) => {
+  const c = document.createElement('canvas');
+  c.width = c.height = 4;
+  const x = c.getContext('2d')!;
+  x.fillStyle = css;
+  x.fillRect(0, 0, 4, 4);
+  return renderer.tileTexture(c);
+};
+(async () => {
+  const res = await fetch('./hsbc.glb');
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const scene = parseGlb(await res.arrayBuffer());
+  const { batches, min, max } = flatten(scene);
+  const white = solidTexture('#fff');
+  const parts: Drawable[] = [];
+  for (const b of batches) {
+    const m = scene.materials[b.material];
+    // glTF colour factors are linear; the world shader treats texture x vertex colour as sRGB
+    const glass = /glass/i.test(m.name ?? '');
+    const k = glass ? 0.72 : 1; // the glass reads too pale without transmission and reflections
+    const c = [0, 1, 2].map((i) => Math.pow(m.color[i], 1 / 2.2) * k);
+    const colors = new Float32Array((b.positions.length / 3) * 3);
+    for (let i = 0; i < colors.length; i += 3) colors.set(c, i);
+    let texture = white;
+    if (m.image) {
+      const bmp = await createImageBitmap(m.image, { imageOrientation: 'none', premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
+      texture = renderer.tileTexture(bmp);
+      bmp.close();
+    }
+    const d = renderer.mesh({ positions: b.positions, normals: b.normals, uvs: b.uvs, colors, indices: b.indices }, texture);
+    d.doubleSided = true;
+    if (glass) d.emitTexture = solidTexture('rgb(115,102,75)'); // offices lit behind the glass at night (about as bright as the city's office windows)
+    if (/sign/i.test(m.name ?? '')) d.emissive = true; // illuminated sign
+    parts.push(d);
+  }
+  // One rigid "walker" of the whole building, for the planar ground shadow
+  const n = batches.reduce((t, b) => t + b.positions.length / 3, 0);
+  const all = { positions: new Float32Array(n * 3), normals: new Float32Array(n * 3), uvs: new Float32Array(n * 2), indices: new Uint32Array(batches.reduce((t, b) => t + b.indices.length, 0)), rig: new Float32Array(n * 2) };
+  let vo = 0, io = 0;
+  for (const b of batches) {
+    all.positions.set(b.positions, vo * 3);
+    all.normals.set(b.normals, vo * 3);
+    all.uvs.set(b.uvs, vo * 2);
+    for (let i = 0; i < b.indices.length; i++) all.indices[io + i] = b.indices[i] + vo;
+    vo += b.positions.length / 3;
+    io += b.indices.length;
+  }
+  const scale = HSBC_HEIGHT / (max[1] - min[1]);
+  // street-facing side (+z, the side with the exterior masts) towards the tram street
+  hsbc = { parts, shadow: renderer.walker(all, white), scale, offset: [-(min[0] + max[0]) / 2, -min[1], -(min[2] + max[2]) / 2] };
+  // a solid block for the flying car (the masts and the roof crane stick out a little)
+  const hx = ((max[0] - min[0]) / 2) * scale, hz = ((max[2] - min[2]) / 2) * scale;
+  street.solids.push({ min: [HSBC_SITE.x - hx, 0, HSBC_SITE.z - hz], max: [HSBC_SITE.x + hx, HSBC_HEIGHT, HSBC_SITE.z + hz] });
+})().catch((e) => console.warn('HSBC building not loaded:', e));
+const NO_POSE = { hipR: [0, 0, 0], hipL: [0, 0, 0], kneeR: [0, 0, 0], kneeL: [0, 0, 0], hipAngleR: 0, hipAngleL: 0, kneeAngleR: 0, kneeAngleL: 0 };
+const UPRIGHT = qAxisAngle([0, 1, 0], 0);
+/** Draws the copies of the HSBC building near the camera; returns the matrix of the nearest one (for its shadow) */
+function drawHsbc(camX: number): Float32Array | null {
+  if (!hsbc) return null;
+  let nearest: Float32Array | null = null, best = Infinity;
+  for (const dx of OFFSETS) {
+    const x = HSBC_SITE.x + dx;
+    const d = Math.abs(x - camX);
+    if (d > 800) continue;
+    const M = modelMatrix([x, 0, HSBC_SITE.z], UPRIGHT, hsbc.scale, hsbc.offset);
+    for (const p of hsbc.parts) renderer.draw(p, M);
+    if (d < best) { best = d; nearest = M; }
+  }
+  return nearest;
+}
 const treeOffset = new Float32Array(16);
 /** Draws each tree once, in the copy of the street nearest the camera */
 function drawTrees(camX: number) {
@@ -268,6 +348,142 @@ function footstep(v: Vehicle, f: FleetEntry, leg: 0 | 1, eye: V3) {
   }
   const d = Math.hypot(foot[0] - eye[0], foot[1] - eye[1], foot[2] - eye[2]);
   shake = Math.max(shake, 0.22 * m.amount * Math.max(0, 1 - d / 70));
+}
+
+// ---- Flying car: the Meshy AI red sports car (reduced to 40k triangles in public/flying-car.glb by
+// scripts/decimate-glb.ts) held up by four lift jets under the body. It hovers over the street until the flying
+// camera (F) hands you the controls: W/S or arrows to drive, A/D or arrows to steer, Space/E up, Shift/Q down.
+const CAR_LENGTH = 4.6; // metres, about a Tesla Model S
+const CAR_MODEL_YAW = Math.PI; // the Meshy model's nose points along -x: turn it to +x
+interface CarModel { parts: Drawable[]; shadow: Walker; scale: number; offset: V3; jets: V3[]; heads: V3[]; tails: V3[] }
+let carModel: CarModel | null = null;
+// starts hovering low over the middle of the road, level with the street lamps: the tram wires (z = +-2.1) and
+// the lamp heads (z = +-5.3) are clear of the 2.2 m wide body there
+const flyer = new FlyingCar([30, 7, 0], 0, [CAR_LENGTH / 2, 0.65, 1.1]);
+// Height slider: sets the height the car holds; climbing or descending with the keys moves the slider along
+const heightUi = { slider: $<HTMLInputElement>('fly-height'), label: $('fly-height-val') };
+heightUi.slider.min = String(FlyingCar.MIN_HEIGHT);
+const showHeight = () => {
+  heightUi.label.textContent = flyer.hold.toFixed(1);
+  heightUi.slider.setAttribute('aria-valuetext', `${flyer.hold.toFixed(1)} m`);
+};
+heightUi.slider.addEventListener('input', () => { flyer.hold = Number(heightUi.slider.value); showHeight(); });
+heightUi.slider.value = String(flyer.hold);
+showHeight();
+loadGlb('./flying-car.glb')
+  .then((m) => {
+    // smoothed surface; the body panels get their own UV layout and a painted atlas (lights glow after dark);
+    // dark tyres / rims / cockpit in vertex colours (see car-paint.ts)
+    const white = solidTexture('#fff');
+    const { body: paintwork, trim } = paintCar(m, m.min, m.max);
+    const atlas = paintCarAtlas();
+    const body = renderer.mesh(paintwork, renderer.tileTexture(atlas.color));
+    body.emitTexture = renderer.tileTexture(atlas.emit);
+    body.doubleSided = true;
+    const trimDrawable = renderer.mesh(trim, white);
+    trimDrawable.doubleSided = true;
+    const s = CAR_LENGTH / (m.max[0] - m.min[0]);
+    const W = (m.max[2] - m.min[2]) * s, H = (m.max[1] - m.min[1]) * s;
+    flyer.resize([CAR_LENGTH / 2, H / 2, W / 2]);
+    const n = m.positions.length / 3;
+    const shadow = renderer.walker({ positions: m.positions, normals: m.normals, uvs: m.uvs, indices: Uint32Array.from(m.indices), rig: new Float32Array(n * 2) }, solidTexture('#fff'));
+    // points in the car's frame (metres from the centre of the underside, nose along +x)
+    const L = CAR_LENGTH;
+    const jets: V3[] = [];
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) jets.push([sx * 0.3 * L, 0.15, sz * 0.3 * W]);
+    const heads: V3[] = [-1, 1].map((sz) => [L / 2 - 0.1, H * 0.42, sz * 0.33 * W]);
+    const tails: V3[] = [-1, 1].map((sz) => [-L / 2 + 0.08, H * 0.5, sz * 0.36 * W]);
+    carModel = { parts: [body, trimDrawable], shadow, scale: s, offset: [-(m.min[0] + m.max[0]) / 2, -m.min[1], -(m.min[2] + m.max[2]) / 2], jets, heads, tails };
+  })
+  .catch((e) => console.warn('Flying car model not loaded:', e));
+const flames = new ParticlePool(glCtx, renderer.particle, 2400, 3.0, 3.0); // drag, then the hot gas rises
+const jetWash = new ParticlePool(glCtx, renderer.particle, 600, 1.2, 0.4); // dust / spray blown off the ground
+const jetGlow = new ParticlePool(glCtx, renderer.particle, 8, 0, 0); // bright nozzle cores
+const keys = new Set<string>();
+addEventListener('keydown', (e) => keys.add(e.code));
+addEventListener('keyup', (e) => keys.delete(e.code));
+addEventListener('blur', () => keys.clear());
+const held = (...codes: string[]) => codes.some((c) => keys.has(c));
+function flyInput(): FlyInput {
+  return {
+    throttle: (held('KeyW', 'ArrowUp') ? 1 : 0) - (held('KeyS', 'ArrowDown') ? 1 : 0),
+    turn: (held('KeyA', 'ArrowLeft') ? 1 : 0) - (held('KeyD', 'ArrowRight') ? 1 : 0),
+    lift: (held('Space', 'KeyE') ? 1 : 0) - (held('ShiftLeft', 'ShiftRight', 'KeyQ') ? 1 : 0),
+  };
+}
+(window as any).dbgSnap = (yaw = 0, pitch = 0.2, dist = 12) => { orbit.yaw = behindCar() + yaw; orbit.pitch = pitch; orbit.dist = dist; goal = null; flyLook = yaw; }; // TEMP-FLY
+let carX = flyer.pos[0]; // x of the copy of the car drawn this frame (nearest the camera)
+const carPos = (): V3 => [carX, flyer.pos[1] + Math.sin(time * 1.7) * 0.08 * (1 - Math.min(1, flyer.speed / 6)), flyer.pos[2]];
+const carRotation = () => qMul(flyer.rotation, qAxisAngle([0, 1, 0], CAR_MODEL_YAW));
+function carMatrix(): Float32Array | null {
+  if (!carModel) return null;
+  return modelMatrix(carPos(), carRotation(), carModel.scale, carModel.offset);
+}
+function updateCar(dt: number, flying: boolean, eye: V3) {
+  const holdBefore = flyer.hold;
+  flyer.update(dt, flying ? flyInput() : NO_INPUT, street.solids, PERIOD);
+  if (flyer.hold !== holdBefore && document.activeElement !== heightUi.slider) {
+    heightUi.slider.value = String(Math.min(Number(heightUi.slider.max), flyer.hold));
+    showHeight();
+  }
+  flyer.pos[0] = wrapX(flyer.pos[0]);
+  if (flyer.impact > 3) shake = Math.max(shake, Math.min(0.5, flyer.impact * 0.04));
+  flyer.impact = 0;
+  // the copy nearest the camera; particles move with it when that changes
+  const x = eye[0] + wrapX(flyer.pos[0] - eye[0]);
+  if (x !== carX) { flames.shift(x - carX); jetWash.shift(x - carX); }
+  carX = x;
+  flames.update(dt);
+  jetWash.update(dt);
+  jetGlow.count = 0;
+  if (!carModel) return;
+  const q = flyer.rotation; // car frame (nose +x), not the model's
+  const p = carPos();
+  const down = qRotate(q, [0, -1, 0]);
+  const t = flyer.thrust;
+  const v = flyer.vel;
+  for (const j of carModel.jets) {
+    const n = qRotate(q, j);
+    const o: V3 = [p[0] + n[0], p[1] + n[1], p[2] + n[2]];
+    glow(jetGlow, add(o, scale(down, 0.1)), 0.9 + 0.7 * t, 0.6 + 0.6 * t);
+    // a short, hot plume blasted downwards; the sprites take on the car's speed so the jet stays attached
+    const count = Math.floor(220 * (0.4 + t) * dt + Math.random()); // sprites per second per jet, rounded at random
+    for (let i = 0; i < count; i++) {
+      const sp = 9 + 9 * t + Math.random() * 4;
+      const jx = (Math.random() - 0.5) * 1.6, jz = (Math.random() - 0.5) * 1.6;
+      const at = Math.random() * 0.3; // spread along the jet, so it does not flicker at low frame rates
+      flames.emit(add(o, scale(down, at)), [down[0] * sp + jx + v[0], down[1] * sp + v[1] * 0.9, down[2] * sp + jz + v[2]], {
+        life: 0.12 + 0.12 * t + Math.random() * 0.08, size0: 0.28 + 0.12 * t, size1: 0.75 + 0.5 * t, alpha: 0.75,
+      });
+    }
+  }
+  // close to the ground the jets kick up dust, or spray off a wet road
+  const alt = flyer.pos[1];
+  if (alt < 9) {
+    const k = (1 - alt / 9) * t;
+    const wet = weather.rain;
+    const ground = Math.abs(p[2]) > 7 ? 0.17 : 0.03;
+    for (let i = 0, n = Math.floor(160 * k * dt + Math.random()); i < n; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = 4 + Math.random() * 5;
+      const g: V3 = [p[0] + Math.cos(a) * 1.2, ground + 0.1, p[2] + Math.sin(a) * 1.2];
+      jetWash.emit(g, [Math.cos(a) * sp + v[0] * 0.5, 0.4 + Math.random() * (wet > 0.3 ? 2.5 : 0.8), Math.sin(a) * sp + v[2] * 0.5], {
+        life: 0.8 + Math.random() * 0.6, size0: 0.5, size1: 2.2, alpha: 0.35 * k + 0.1, shade: wet > 0.3 ? 1.1 : 0.75 + Math.random() * 0.1,
+      });
+    }
+  }
+}
+/** The jets light up the car's underside and the street below like a warm lamp; head and tail lights after dark */
+function carLights() {
+  if (!carModel) return;
+  const q = flyer.rotation;
+  const p = carPos();
+  const slot = Math.min(lights.lampCount, MAX_LAMPS - 1);
+  lights.lamps.set([p[0], p[1] - 0.4, p[2], 2.5 * flyer.thrust * (0.35 + 0.65 * lampK)], slot * 4);
+  lights.lampCount = slot + 1;
+  if (headK < 0.01) return;
+  for (const h of carModel.heads) glow(headGlow, add(p, qRotate(q, h)), 0.6, headK);
+  for (const t of carModel.tails) glow(tailGlow, add(p, qRotate(q, t)), 0.4, 0.8 * headK);
 }
 
 // ---- Street lamp avoidance ----
@@ -686,7 +902,7 @@ function emitPetals(dt: number, near: V3) {
 }
 
 // ---- Camera: orbit around the #80 tram, presets, upper-deck ride view ----
-type CamMode = 'street' | 'classic' | 'front' | 'side' | 'top' | 'ride' | 'driver' | 'mecha';
+type CamMode = 'street' | 'classic' | 'front' | 'side' | 'top' | 'ride' | 'driver' | 'mecha' | 'fly';
 type CabMode = 'ride' | 'driver';
 const isCab = (m: CamMode): m is CabMode => m === 'ride' || m === 'driver';
 const PRESETS: Record<Exclude<CamMode, CabMode>, { yaw: number; pitch: number; dist: number }> = {
@@ -696,7 +912,11 @@ const PRESETS: Record<Exclude<CamMode, CabMode>, { yaw: number; pitch: number; d
   side: { yaw: -Math.PI / 2, pitch: 0.12, dist: 7.8 }, // from the kerb-side pavement: doors and livery
   top: { yaw: 0.0, pitch: 1.2, dist: 60 },
   mecha: { yaw: -0.7, pitch: 0.15, dist: 24 }, // 3/4 view of the mecha being followed
+  fly: { yaw: Math.PI, pitch: 0.2, dist: 12 }, // chase view behind the flying car (yaw follows the car)
 };
+let flyLook = 0; // drag offset of the chase view around the car; eases back behind it
+/** Orbit yaw that puts the camera behind the car (the car faces (cos yaw, 0, -sin yaw)) */
+const behindCar = () => Math.PI - flyer.yaw + flyLook;
 let mechaIndex = -1; // which mecha the mecha camera follows
 let mode: CamMode = 'street';
 const orbit = { ...PRESETS.street };
@@ -723,7 +943,8 @@ canvas.addEventListener('pointerup', () => (dragging = false));
 canvas.addEventListener('pointermove', (e) => {
   if (!dragging) return;
   if (isCab(mode)) { rideLook = Math.max(-1.5, Math.min(1.5, rideLook - e.movementX * 0.005)); return; }
-  orbit.yaw -= e.movementX * 0.006;
+  if (mode === 'fly') flyLook -= e.movementX * 0.006;
+  else orbit.yaw -= e.movementX * 0.006;
   orbit.pitch = Math.max(0.0, Math.min(1.45, orbit.pitch + e.movementY * 0.005));
 });
 canvas.addEventListener('wheel', (e) => {
@@ -762,6 +983,17 @@ function camera(dt: number): Camera {
       target = [followed.x, 0.5 * (m.rig.max[1] - m.rig.min[1]) * f.scale, side * (Math.abs(LANES[followed.lane]) + m.zOffset - m.inward)];
       // walking east the camera sits ahead of it as for the tram; walking west, swing round to its front
       if (goal && followed.lane === 1) goal.yaw = Math.PI - PRESETS.mecha.yaw;
+    }
+    if (mode === 'fly') {
+      // third-person chase view: swings round behind the car as it turns
+      target = add(carPos(), [0, 1.3, 0]);
+      if (!dragging) flyLook *= Math.exp(-dt * 1.2);
+      if (goal) goal.yaw = behindCar();
+      else {
+        let dy = behindCar() - orbit.yaw;
+        dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+        orbit.yaw += dy * (1 - Math.exp(-dt * 4));
+      }
     }
     const c = Math.cos(orbit.pitch);
     eye = add(target, scale([c * Math.cos(orbit.yaw), Math.sin(orbit.pitch), c * Math.sin(orbit.yaw)], orbit.dist));
@@ -805,7 +1037,10 @@ musicBtn.addEventListener('click', toggleMusic);
 
 // ---- Keys, export, resize ----
 addEventListener('keydown', (e) => {
-  if (e.code === 'Space') { e.preventDefault(); bell.start(); bell.ring(); }
+  const flying = mode === 'fly';
+  if (flying && (e.code.startsWith('Arrow') || e.code === 'Space')) e.preventDefault(); // no page scrolling
+  if (e.code === 'KeyF') setCamera(flying ? 'street' : 'fly');
+  if (e.code === 'Space' && !flying) { e.preventDefault(); bell.start(); bell.ring(); }
   if (e.code === 'KeyV') setCamera(mode === 'ride' ? 'street' : 'ride');
   if (e.code === 'KeyP') ui.drive.checked = !ui.drive.checked;
   if (e.code === 'Digit1') setWeather('sunny');
@@ -813,7 +1048,7 @@ addEventListener('keydown', (e) => {
   if (e.code === 'Digit3') setWeather('rain');
   if (e.code === 'KeyN') goToHour(nightNow > 0.5 ? 12 : 22);
   if (e.code === 'KeyC') setCamera(mode === 'driver' ? 'street' : 'driver');
-  if (e.code === 'KeyW') setWipers(wiperMode === 'auto' ? 'on' : wiperMode === 'on' ? 'off' : 'auto');
+  if (e.code === 'KeyW' && !flying) setWipers(wiperMode === 'auto' ? 'on' : wiperMode === 'on' ? 'off' : 'auto');
   if (e.code === 'KeyM') toggleMusic();
   if (e.code === 'KeyH') setHeadlights(headlightMode === 'auto' ? 'on' : headlightMode === 'on' ? 'off' : 'auto');
 });
@@ -847,10 +1082,12 @@ function updateHud(dt: number) {
   if ((hudTimer -= dt) > 0) return;
   hudTimer = 0.15;
   const { stop, dist } = nextStop(main);
-  hud.spd.textContent = `${Math.round(main.v * 3.6)} km/h`;
-  hud.state.textContent = main.dwell > 0 ? `停站 At stop ${Math.ceil(main.dwell)}s` : main.v > 0.3 ? '行駛中 Running' : '停車 Stopped';
+  const flying = mode === 'fly';
+  hud.spd.textContent = `${Math.round((flying ? flyer.speed : main.v) * 3.6)} km/h`;
+  hud.state.textContent = flying ? `🚗 飛行中 Flying · 高度 ${Math.round(flyer.pos[1])} m`
+    : main.dwell > 0 ? `停站 At stop ${Math.ceil(main.dwell)}s` : main.v > 0.3 ? '行駛中 Running' : '停車 Stopped';
   hud.next.textContent = `${stop.name} (${Math.round(dist)} m)`;
-  hud.pos.textContent = `${Math.round(main.x)} m`;
+  hud.pos.textContent = `${Math.round(flying ? flyer.pos[0] : main.x)} m`;
   hud.clock.textContent = `${formatHour(hour)} ${headK > 0.5 ? '💡' : ''}`;
 }
 
@@ -869,6 +1106,7 @@ function frame(now: number) {
   for (const t of trams) updateTram(t, dt);
   if (ui.traffic.checked) updateTraffic(dt);
   updateMechas(dt); // the mechas walk even with road traffic switched off
+  updateCar(dt, mode === 'fly', prevEye ?? flyer.pos);
   blendWeather(weather, WEATHER[weatherName], 1 - Math.exp(-dt * 1.2));
   flash *= Math.exp(-dt * 9);
   if (weather.rain > 0.8 && (nextLightning -= dt) <= 0) {
@@ -888,6 +1126,7 @@ function frame(now: number) {
   const tod = applyTimeOfDay(lit, weather, hour);
   nightNow = tod.night;
   updateLights(dt, tod, cam.pos);
+  carLights();
   updateWipers(dt);
   if (ui.peds.checked) {
     const movers: Mover[] = trams.map((t) => ({ x: t.x, dir: t.dir, v: t.v, half: TRAM.L + 0.1, decel: TRAM_DECEL }));
@@ -916,6 +1155,7 @@ function frame(now: number) {
   renderer.beginWorld(state);
   for (const m of offsetMatrices) for (const d of statics) renderer.draw(d, m);
   drawTrees(cam.pos[0]);
+  const hsbcMatrix = drawHsbc(cam.pos[0]);
   for (const dx of OFFSETS) for (const t of trams) {
     renderer.draw(t.model, tramMatrix(t, dx));
     renderer.draw(wiperModel, wiperMatrix(t, dx));
@@ -943,11 +1183,19 @@ function frame(now: number) {
       for (const dx of OFFSETS) renderer.draw(f.model, modelMatrix([v.x + dx, 0, LANES[v.lane]], qAxisAngle([0, 1, 0], heading), f.scale));
     }
   }
+  const flyMatrix = carMatrix();
+  if (carModel && flyMatrix) {
+    for (const p of carModel.parts) renderer.draw(p, flyMatrix);
+    mechaShadows.push({ walker: carModel.shadow, model: flyMatrix, pose: NO_POSE });
+  }
   renderer.drawCrowd(state, crowd);
   // Mecha shadows from the sun (or moon): darker in strong sunlight, faint under cloud, rain or at night
   const sunLum = (lit.sunColor[0] + lit.sunColor[1] + lit.sunColor[2]) / 3;
+  if (hsbc && hsbcMatrix) mechaShadows.push({ walker: hsbc.shadow, model: hsbcMatrix, pose: NO_POSE });
   renderer.drawWalkerShadows(state, mechaShadows, tod.lightDir, 0.12 + 0.48 * Math.min(1, sunLum / 1.2));
-  renderer.drawParticles(state, dust, noFlame);
+  renderer.drawParticles(state, jetWash, noFlame);
+  renderer.drawParticles(state, dust, flames); // footstep dust, then the flying car's jet flames (additive)
+  renderer.drawGlows(state, jetGlow, [1.0, 0.62, 0.3]);
   for (const v of vehicles) {
     const m = fleet[v.kind].mecha;
     if (m && m.eyeGlow.count) renderer.drawGlows(state, m.eyeGlow, m.eyeColor);

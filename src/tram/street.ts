@@ -3,7 +3,7 @@
 // The Pawn (和昌大押), towers behind, the Bank of China Tower and the Peak in the distance.
 // Street runs along x; tram tracks at z = -2.1 (eastbound, +x) and z = +2.1 (westbound).
 import { V3, mulberry32 } from '../sim/math';
-import { CityBuilder } from '../sim/city-builder';
+import { CityBuilder, Box3 } from '../sim/city-builder';
 import { MaterialName } from '../sim/city-textures';
 import type { MeshData } from '../webgl/mesh';
 import { SIGNS, SIGN_ATLAS, signSlot } from './signs';
@@ -19,6 +19,9 @@ export const WIRE_Y = RAIL_TOP + POLE_TIP[1];
 // Zebra crossings (x of the centre line); the trees and lamps keep clear of them
 export const CROSSINGS = [-180, -60, 60, 180];
 export const ZEBRA_HALF = 2; // half width along the street
+// Site of the HSBC Main Building model (loaded at runtime, see main-tram-demo.ts): north of the street, just west of
+// the Bank of China Tower as in Central. Background towers are kept off this rectangle.
+export const HSBC_SITE = { x: -30, z: -140, halfX: 52, halfZ: 40 };
 export const KERB_EDGE = 7; // |z| of the kerb line (pavements run to the frontage at 11)
 const ROAD = 7; // road half width
 const KERB = 11; // building frontage
@@ -29,11 +32,14 @@ export interface Street {
   trees: { x: number; z: number; side: number; scale: number }[]; // planting spots (for replacement tree models)
   lamps: V3[]; // light position under each street lamp head
   beacons: V3[]; // flashing amber globes at the zebra crossings
+  solids: Box3[]; // bounding boxes of the buildings, for the flying car to bump into
 }
 
 export function buildStreet(seed = 1904): Street {
   const rnd = mulberry32(seed);
   const b = new CityBuilder();
+  const solids: Box3[] = [];
+  const solid = (x0: number, x1: number, y1: number, z0: number, z1: number) => solids.push({ min: [x0, 0, z0], max: [x1, y1, z1] });
   const range = (lo: number, hi: number) => lo + rnd() * (hi - lo);
   const pick = <T>(a: T[]) => a[Math.floor(rnd() * a.length)];
   const S = STREET_HALF;
@@ -188,6 +194,7 @@ export function buildStreet(seed = 1904): Street {
     b.box(x0, x1, 4.5, 4.5 + floors * 3.5, z0, z1, 'tonglau', 'roof', false);
     b.color = [1, 1, 1];
     b.box(x0 + 1, x0 + 3, 4.5 + floors * 3.5, 4.5 + floors * 3.5 + 2.5, z0 + 2, z0 + 5, 'concrete', 'roof', false); // stair hood
+    solid(x0, x1, 4.5 + floors * 3.5, z0, z1);
     // Hanging sign over the pavement
     const x = range(x0 + 1.5, x1 - 1.5);
     if (rnd() < 0.65 && !nearTree(side, x)) { // signs would poke through the canopy
@@ -206,7 +213,10 @@ export function buildStreet(seed = 1904): Street {
     tint(pick(PASTEL));
     const inset = 1.5;
     const [tz0, tz1] = side > 0 ? [z0 + inset + 2, z1 - inset] : [z0 + inset, z1 - inset - 2];
-    b.box(x0 + inset, x1 - inset, 6, range(45, 110), tz0, tz1, pick(['residential', 'residential2', 'office', 'glass'] as MaterialName[]), 'roof', false);
+    const th = range(45, 110); // drawn before pick() as when it was inline, so the street is unchanged
+    b.box(x0 + inset, x1 - inset, 6, th, tz0, tz1, pick(['residential', 'residential2', 'office', 'glass'] as MaterialName[]), 'roof', false);
+    solid(x0, x1, 6, z0, z1);
+    solid(x0 + inset, x1 - inset, th, tz0, tz1);
   };
 
   // The Pawn (和昌大押): four-storey veranda building with a ground-floor arcade over the pavement
@@ -222,6 +232,7 @@ export function buildStreet(seed = 1904): Street {
     for (let x = x0 + 0.3; x < x1; x += (x1 - x0 - 0.6) / 5) b.box(x, x + 0.6, 0.15, 4.5, 9, 9.6, 'pawn', null, false); // arcade pillars
     for (const y of [4.5, 8.1, 11.7]) b.box(x0 - 0.2, x1 + 0.2, y - 0.25, y, 8.8, 13.5, 'concrete', 'concrete', false); // cornices
     b.box(x0, x1, H, H + 0.9, 9, 13.5, 'pawn', 'roof', false); // parapet
+    solid(x0, x1, H + 0.9, 9, 26);
     wallSign(2, x0 + 3, x1 - 3, H - 0.1, H + 0.85, 8.98, -1); // 和昌大押 plaque
     hangingSign(8, x0 + 1.2, 7.6, 8.9, 5.5, 8.0); // red bat-shaped 押 sign
   };
@@ -261,10 +272,21 @@ export function buildStreet(seed = 1904): Street {
     const cz = side * range(40, 260);
     const h = range(40, 170) * (1 - Math.abs(cz) / 600);
     tint(pick(PASTEL));
-    if (rnd() < 0.25) b.prism(cx, cz, range(10, 16), 0, h, pick([6, 8, 24]), pick(['glass', 'office'] as MaterialName[]), 'roof', { collide: false, rot: rnd() });
-    else {
+    // the random numbers are drawn either way, so the rest of the skyline is unchanged by the HSBC site
+    const onSite = (hx: number, hz: number) => Math.abs(cx - HSBC_SITE.x) < HSBC_SITE.halfX + hx && Math.abs(cz - HSBC_SITE.z) < HSBC_SITE.halfZ + hz;
+    if (rnd() < 0.25) {
+      const r = range(10, 16), seg = pick([6, 8, 24]), mat = pick(['glass', 'office'] as MaterialName[]), rot = rnd();
+      if (!onSite(r, r)) {
+        b.prism(cx, cz, r, 0, h, seg, mat, 'roof', { collide: false, rot });
+        solid(cx - r * 0.9, cx + r * 0.9, h, cz - r * 0.9, cz + r * 0.9);
+      }
+    } else {
       const hw = range(8, 16), hd = range(8, 16);
-      b.box(cx - hw, cx + hw, 0, h, cz - hd, cz + hd, pick(['residential', 'residential2', 'office', 'glass'] as MaterialName[]), 'roof', false);
+      const mat = pick(['residential', 'residential2', 'office', 'glass'] as MaterialName[]);
+      if (!onSite(hw, hd)) {
+        b.box(cx - hw, cx + hw, 0, h, cz - hd, cz + hd, mat, 'roof', false);
+        solid(cx - hw, cx + hw, h, cz - hd, cz + hd);
+      }
     }
   }
 
@@ -287,6 +309,7 @@ export function buildStreet(seed = 1904): Street {
       for (const P of [A, C]) b.tri('boc', [cx, H, cz], P, top, uv([cx, H, cz]), uv(P), uv(top), inside);
     });
     for (const dx of [-3, 3]) b.prism(cx + dx, cz + 8, 0.8, 245, 300, 6, 'white', null, { collide: false });
+    solid(cx - h, cx + h, 275, cz - h, cz + h);
   }
   // Victoria Peak behind the south side
   b.prism(-100, 900, 650, 0, 480, 24, 'hill', 'hill', { taper: 0.1, jitter: 0.12, rnd, collide: false });
@@ -348,5 +371,5 @@ export function buildStreet(seed = 1904): Street {
   }
 
   b.color = [1, 1, 1];
-  return { batches: b.finish(), blossoms, trees, lamps, beacons };
+  return { batches: b.finish(), blossoms, trees, lamps, beacons, solids };
 }

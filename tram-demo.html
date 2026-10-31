@@ -50,6 +50,9 @@
       <button data-cam="ride" class="wide" aria-pressed="false">🚋 上層車頭座位 Upper deck (V)</button>
       <button data-cam="mecha" class="wide" aria-pressed="false">🤖 跟拍機械人 Follow a mecha</button>
       <button data-cam="driver" class="wide" aria-pressed="false">🧑‍✈️ 司機位 Driver's cab (C)</button>
+      <button data-cam="fly" class="wide" aria-pressed="false">🚗 駕駛飛天車 Fly the car (F)</button>
+      <label class="row" style="grid-column: span 2"><span>飛天車高度 Flying height <b id="fly-height-val">7.0</b> m</span><input type="range" id="fly-height" min="0.6" max="60" step="0.1" value="7" aria-label="Flying car height (metres)"></label>
+      <p class="sub" style="grid-column: span 2; margin: 0">飛天車：<kbd>W</kbd><kbd>S</kbd> 前進 / 後退、<kbd>A</kbd><kbd>D</kbd> 轉向（或方向鍵）、<kbd>Space</kbd>/<kbd>E</kbd> 上升、<kbd>Shift</kbd>/<kbd>Q</kbd> 下降，拖曳睇四周</p>
     </div>
 
     <h2>電車 Tram</h2>
@@ -124,7 +127,7 @@
   </div>
 
   <div id="help" class="panel">
-    <kbd>Space</kbd> 叮叮 &nbsp; <kbd>V</kbd> 上層座位 &nbsp; <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 天氣 &nbsp; <kbd>P</kbd> 暫停 / 開車 &nbsp; <kbd>N</kbd> 日 / 夜 &nbsp; <kbd>H</kbd> 車頭燈 &nbsp; <kbd>C</kbd> 司機位 &nbsp; <kbd>W</kbd> 水撥 &nbsp; <kbd>M</kbd> 音樂
+    <kbd>Space</kbd> 叮叮 &nbsp; <kbd>V</kbd> 上層座位 &nbsp; <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 天氣 &nbsp; <kbd>P</kbd> 暫停 / 開車 &nbsp; <kbd>N</kbd> 日 / 夜 &nbsp; <kbd>H</kbd> 車頭燈 &nbsp; <kbd>C</kbd> 司機位 &nbsp; <kbd>W</kbd> 水撥 &nbsp; <kbd>M</kbd> 音樂 &nbsp; <kbd>F</kbd> 飛天車
   </div>
 
   <script type="module" src="/src/main-tram-demo.ts"></script>

@@ -26,6 +26,8 @@ export interface Primitive {
   uvs: Float32Array;
   indices: Uint32Array;
   material: number;
+  /** Optional per-vertex RGB (written as COLOR_0; not read back by parseGlb) */
+  colors?: Float32Array;
 }
 
 export interface SceneNode {
@@ -345,7 +347,10 @@ export async function writeGlb(scene: GltfScene): Promise<Blob> {
       if (!meshIndex.has(n.primitives)) {
         meshes.push({
           primitives: n.primitives.map((p) => ({
-            attributes: { POSITION: addAccessor(p.positions, 'VEC3', 34962), NORMAL: addAccessor(p.normals, 'VEC3', 34962), TEXCOORD_0: addAccessor(p.uvs, 'VEC2', 34962) },
+            attributes: {
+              POSITION: addAccessor(p.positions, 'VEC3', 34962), NORMAL: addAccessor(p.normals, 'VEC3', 34962), TEXCOORD_0: addAccessor(p.uvs, 'VEC2', 34962),
+              ...(p.colors ? { COLOR_0: addAccessor(p.colors, 'VEC3', 34962) } : {}),
+            },
             indices: addAccessor(p.indices, 'SCALAR', 34963),
             material: p.material,
           })),
