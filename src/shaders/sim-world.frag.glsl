@@ -86,6 +86,21 @@ void main() {
   if (uMaterial == 2) {
     // Emissive (neon signs): unlit, slightly over-bright so they glow on dull days, brighter at night
     color = albedo * (1.35 + uEmitK * 1.4) + uFlash * 0.2;
+  } else if (uMaterial == 3) {
+    // Car clear coat: the paint sits under a layer that mirrors the sky, with a tight sun highlight
+    vec3 R = reflect(-V, N);
+    float fresnel = 0.04 + 0.96 * pow(1.0 - max(dot(N, V), 0.0), 5.0);
+    float ndl = max(dot(N, uSunDir), 0.0);
+    // wrapped sun, so the underside and the lower lip stay red instead of dropping to black
+    float wrap = ndl * 0.62 + 0.38;
+    vec3 ambient = mix(uAmbGround, uAmbSky, N.y * 0.5 + 0.5) + uFlash;
+    vec3 H = normalize(V + uSunDir);
+    float spec = pow(max(dot(N, H), 0.0), 180.0) * ndl;
+    vec3 localSpec;
+    vec3 local = localLights(N, V, 1.0, localSpec);
+    vec3 paint = albedo * (ambient * 0.85 + uSunColor * wrap + local);
+    color = mix(paint, skyColor(R), fresnel * 0.62);
+    color += uSunColor * spec * 1.5 + localSpec;
   } else if (uMaterial == 1) {
     // Water: animated normals, Fresnel mix of sky reflection and the water body, sun glint
     vec2 g = waveSlope(vWorld.xz, uTime) * (1.0 + uWet * 1.5);

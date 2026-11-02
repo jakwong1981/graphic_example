@@ -4,7 +4,7 @@
 import { V3, mulberry32 } from '../sim/math';
 import type { CrowdMesh } from '../sim/scene-renderer';
 import { CROWD_STRIDE } from '../sim/scene-renderer';
-import { CROSSINGS, ZEBRA_HALF, KERB_EDGE, STREET_HALF } from './street';
+import { CROSSINGS, ZEBRA_HALF, KERB_EDGE, STREET_HALF, SIGNAL_CROSSINGS } from './street';
 
 // ---- Person mesh (faces +x, feet at y = 0) ----
 type Slot = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7; // skin, shirt, trousers, hair, shoes, umbrella, bag, umbrella pole
@@ -146,7 +146,8 @@ export class Pedestrians {
     return true;
   }
 
-  update(dt: number, opts: { movers: Mover[]; rain: number; active: number }) {
+  /** `walk`: per crossing, false while a signal crossing shows the red man (zebras leave it out or true) */
+  update(dt: number, opts: { movers: Mover[]; rain: number; active: number; walk?: boolean[] }) {
     const { movers, rain } = opts;
     const rnd = this.rnd;
     const hurry = 1 + rain * 0.3;
@@ -178,7 +179,8 @@ export class Pedestrians {
             CROSSINGS.forEach((c, i) => {
               if (p.state === 'walk' && Math.abs(wrapX(c - p.x)) < 0.6) {
                 p.cooldown = 8;
-                if (rnd() < 0.2) { p.state = 'toKerb'; p.crossing = i; p.cx = c + (rnd() - 0.5) * 2.6; }
+                // more people use the signal crossings, so a little crowd gathers at the red man
+                if (rnd() < (SIGNAL_CROSSINGS.includes(c) ? 0.4 : 0.2)) { p.state = 'toKerb'; p.crossing = i; p.cx = c + (rnd() - 0.5) * 2.6; }
               }
             });
           }
@@ -195,7 +197,7 @@ export class Pedestrians {
         case 'wait':
           p.speed = 0;
           p.heading = p.side > 0 ? Math.PI / 2 : -Math.PI / 2; // face across the road
-          if (this.safe(p.crossing, movers)) p.state = 'cross';
+          if ((opts.walk?.[p.crossing] ?? true) && this.safe(p.crossing, movers)) p.state = 'cross';
           break;
         case 'cross':
           target = [p.cx, -p.side * KERB_WAIT];
@@ -217,7 +219,8 @@ export class Pedestrians {
           vz = (dz / d) * v;
         }
       }
-      if (p.state === 'wait' || p.state === 'cross') this.blocked[p.crossing] = true;
+      // at a zebra, waiting at the kerb already stops the traffic; at a red man people just wait
+      if (p.state === 'cross' || (p.state === 'wait' && (opts.walk?.[p.crossing] ?? true))) this.blocked[p.crossing] = true;
       // Integrate, face the walking direction, animate the stride
       p.x = wrapX(p.x + vx * dt);
       p.z += vz * dt;

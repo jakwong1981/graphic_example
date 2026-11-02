@@ -72,6 +72,8 @@
     <label class="row"><span>櫻花飄落 Falling petals</span><input type="checkbox" id="petals" checked></label>
     <label class="row"><span>車輛 Road traffic</span><input type="checkbox" id="traffic" checked></label>
     <label class="row"><span>路人 Pedestrians</span><input type="checkbox" id="peds" checked></label>
+    <label class="row"><span>遠處減面 Level of detail</span><input type="checkbox" id="lod" checked></label>
+    <p class="sub">掃描模型三角形 Scanned-model triangles: <span id="lod-stats">…</span></p>
     <p class="sub">🤖 巨型機械人：渣古同機械人 Mecha Figure 自己行、精神感應 Mk-II 迎面而來，經過街燈會慢慢避開 Mechas: <span id="mecha-status">…</span></p>
     <div class="grid">
       <button data-weather="sunny" aria-pressed="true">☀️ 晴天</button>
@@ -114,6 +116,7 @@
   </aside>
 
   <div id="hud" class="panel" role="status" aria-live="off">
+    <div><span>幀率 FPS</span><b id="fps">-</b></div>
     <div><span>速度 Speed</span><b id="spd">0 km/h</b></div>
     <div><span>狀態 Status</span><b id="state">-</b></div>
     <div><span>下一站 Next stop</span><b id="next">-</b></div>

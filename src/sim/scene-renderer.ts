@@ -38,6 +38,8 @@ export interface Drawable {
   emitTexture?: WebGLTexture;
   water?: boolean;
   emissive?: boolean;
+  /** Glossy clear coat (car paint): sky reflection and a tight highlight */
+  clearcoat?: boolean;
   /** Draw both faces (scanned / photogrammetry meshes with mixed winding) */
   doubleSided?: boolean;
 }
@@ -413,7 +415,7 @@ export class SceneRenderer {
   draw(d: Drawable, model: Float32Array) {
     const gl = this.gl;
     this.uw.m4('uModel', model);
-    this.uw.i('uMaterial', d.water ? 1 : d.emissive ? 2 : 0);
+    this.uw.i('uMaterial', d.water ? 1 : d.emissive ? 2 : d.clearcoat ? 3 : 0);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, d.emitTexture ?? this.black);
     gl.activeTexture(gl.TEXTURE0);

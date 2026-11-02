@@ -19,6 +19,9 @@ export const WIRE_Y = RAIL_TOP + POLE_TIP[1];
 // Zebra crossings (x of the centre line); the trees and lamps keep clear of them
 export const CROSSINGS = [-180, -60, 60, 180];
 export const ZEBRA_HALF = 2; // half width along the street
+// Crossings run by traffic lights (public/traffic-light.glb, see main-tram-demo.ts) instead of a zebra: no
+// stripes or amber beacons, just the two edge lines; traffic stops on red and people cross on the green man
+export const SIGNAL_CROSSINGS = [-60, 60];
 // Site of the HSBC Main Building model (loaded at runtime, see main-tram-demo.ts): just behind the north
 // shophouses and west of the Bank of China Tower, as in Central. The street-facing masts point at the tram
 // road. Background towers are kept off this plot, so the facade reads from the street instead of sitting
@@ -72,6 +75,11 @@ export function buildStreet(seed = 1904): Street {
   const nearCrossing = (x: number) => Math.min(...CROSSINGS.map((c) => Math.abs(c - x)));
   const beacons: V3[] = [];
   for (const c of CROSSINGS) {
+    if (SIGNAL_CROSSINGS.includes(c)) {
+      // signal crossing: a line of white studs along each edge, nothing else
+      for (const e of [-1, 1]) for (let z = -ROAD + 0.3; z < ROAD - 0.2; z += 0.6) flatRect('white', c + e * ZEBRA_HALF - 0.1, c + e * ZEBRA_HALF + 0.1, z, z + 0.3, 0.014);
+      continue;
+    }
     for (let z = -ROAD + 0.3; z < ROAD - 0.2; z += 1.0) flatRect('white', c - ZEBRA_HALF, c + ZEBRA_HALF, z, z + 0.5, 0.014);
     for (const s of [-1, 1]) {
       const [x, z] = [c - ZEBRA_HALF - 0.6, s * 7.35];

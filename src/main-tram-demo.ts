@@ -9,17 +9,19 @@ import { V3, add, sub, scale, cross, norm, qAxisAngle, qRotate, qMul, modelMatri
 import { paintCityMaterial } from './sim/city-textures';
 import { ParticlePool } from './sim/particles';
 import { WEATHER, WeatherName, blendWeather, cloneWeather, Rain } from './sim/weather';
-import { SceneRenderer, Camera, Drawable, SceneLights, MAX_LAMPS, MAX_SPOTS, Walker } from './sim/scene-renderer';
+import { SceneRenderer, Camera, Drawable, SceneLights, MAX_LAMPS, MAX_SPOTS, Walker, WalkerMesh } from './sim/scene-renderer';
+import { buildLods, lodLevel, distance as lodDistance, bounds, LodMesh } from './sim/lod';
 import { applyTimeOfDay, formatHour, TimeOfDay } from './sim/daynight';
 import { Windscreen } from './sim/windscreen';
 import { Wiper, WiperMode, wiperSpeed, buildWiperMesh, WIPER, WIPER_PIVOT_LOCAL, LOWER_PANE, UPPER_PANE } from './tram/wiper';
 import { exportGlb } from './image3d/glb-export';
 import { loadGlb } from './loaders/glb';
 import { rigMecha, walkPose, strideRate, MechaRig } from './tram/mecha-walker';
-import { buildStreet, STREET_HALF, TRACKS, LANES, RAIL_TOP, CROSSINGS, ZEBRA_HALF, HSBC_SITE } from './tram/street';
+import { buildStreet, STREET_HALF, TRACKS, LANES, RAIL_TOP, CROSSINGS, ZEBRA_HALF, HSBC_SITE, SIGNAL_CROSSINGS } from './tram/street';
+import { signalAt, mustStop } from './tram/traffic-signal';
 import { parseGlb, flatten } from './zaku/gltf-scene';
 import { Pedestrians, Mover, buildPersonMesh } from './tram/pedestrians';
-import { FlyingCar, FlyInput, NO_INPUT } from './tram/flying-car';
+import { FlyingCar, FlyInput, NO_INPUT, Obstacle } from './tram/flying-car';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const canvas = $<HTMLCanvasElement>('glcanvas');
@@ -45,17 +47,48 @@ for (const [material, data] of street.batches) {
   if (material === 'bark' || material === 'blossom') proceduralTree.push(d);
 }
 
+// ---- Level of detail for the scanned models (see sim/lod.ts) ----
+// Each scan gets two simpler copies at load time. Every draw picks one by how big the object is on screen, so
+// far away trees, vans, mechas and the HSBC building cost a fraction of their triangles. The LOD box in the
+// panel switches it off to compare; the panel shows the triangles drawn against the full count.
+interface LodSet<T> { levels: T[]; tris: number[]; radius: number; pixels?: number[] }
+const lodCount = { drawn: 0, full: 0 }; // this frame, scanned models only
+function lodPick<T>(s: LodSet<T>, center: ArrayLike<number>, eye: ArrayLike<number>): T {
+  const pxPerRad = canvas.height / (2 * Math.tan(FOV / 2));
+  const l = ui.lod.checked ? lodLevel(s.radius, lodDistance(center, eye), pxPerRad, s.levels.length, s.pixels) : 0;
+  lodCount.drawn += s.tris[l];
+  lodCount.full += s.tris[0];
+  return s.levels[l];
+}
+/** Drawables for a mesh and its simpler copies; `radius` is the bounding radius in metres once placed */
+async function meshLods(m: LodMesh, targets: number[], texture: WebGLTexture, radius: number, setup?: (d: Drawable) => void): Promise<LodSet<Drawable>> {
+  const lods = await buildLods(m, targets);
+  const levels = lods.map((l) => {
+    const d = renderer.mesh({ positions: l.positions, normals: l.normals, uvs: l.uvs, colors: l.colors, indices: l.indices as Uint16Array | Uint32Array }, texture);
+    d.doubleSided = true;
+    setup?.(d);
+    return d;
+  });
+  return { levels, tris: lods.map((l) => l.indices.length / 3), radius };
+}
+/** Walkers (rigged mechas, or rigid shadow casters) for a mesh and its simpler copies */
+async function walkerLods(m: WalkerMesh, targets: number[], texture: WebGLTexture, radius: number): Promise<LodSet<Walker>> {
+  const lods = await buildLods(m, targets);
+  const levels = lods.map((l) => renderer.walker({ positions: l.positions, normals: l.normals, uvs: l.uvs, indices: Uint32Array.from(l.indices), rig: l.rig ?? new Float32Array((l.positions.length / 3) * 2) }, texture));
+  return { levels, tris: lods.map((l) => l.indices.length / 3), radius };
+}
+
 // ---- Cherry blossom trees: the Meshy AI tree (reduced to 39k triangles by scripts/decimate-glb.ts) replaces the
 // built-in ones at every planting spot. Until it has loaded, or if it fails, the built-in trees stay.
 const TREE_HEIGHT = 7; // metres, like the built-in trees
 const TREE_DEPTH = 0.5; // squash across the pavement so the canopy stays clear of the facades and the bus lane
-let treeModel: { drawable: Drawable; matrices: Float32Array[] } | null = null;
+let treeModel: { lods: LodSet<Drawable>; matrices: Float32Array[] } | null = null;
 loadGlb('./cherry-blossom-tree.glb')
-  .then((m) => {
+  .then(async (m) => {
     if (!m.baseColorImage) throw new Error('no texture');
-    const drawable = renderer.mesh(m, renderer.tileTexture(m.baseColorImage));
-    drawable.doubleSided = true;
     const s0 = TREE_HEIGHT / (m.max[1] - m.min[1]);
+    // 39k triangles close up, 8k and 2k further off (a street has dozens of them in view)
+    const lods = await meshLods(m, [8000, 2000], renderer.tileTexture(m.baseColorImage), bounds(m.positions).radius * s0);
     const cx = (m.min[0] + m.max[0]) / 2, cz = (m.min[2] + m.max[2]) / 2;
     // T(spot) * R_y(0 or pi) * S(sx, sy, sz) * T(-canopy centre, -bottom): canopy centred over the planting spot
     const matrices = street.trees.map((t, i) => {
@@ -69,7 +102,7 @@ loadGlb('./cherry-blossom-tree.glb')
         t.x - cx * sx, 0.15 - m.min[1] * sy, t.z - cz * sz, 1,
       ]);
     });
-    treeModel = { drawable, matrices };
+    treeModel = { lods, matrices };
     for (const d of proceduralTree) statics.splice(statics.indexOf(d), 1);
   })
   .catch((e) => console.warn('Cherry blossom tree model not loaded, keeping the built-in trees:', e));
@@ -78,7 +111,10 @@ loadGlb('./cherry-blossom-tree.glb')
 // building becomes about 146 m. Lit like the rest of the city (sun, sky, fog, wet streets), with lit floors behind
 // the glass after dark, a glowing sign, and a ground shadow cast with the mecha shadow pass.
 const HSBC_HEIGHT = 179 * (300 / 367);
-interface Landmark { parts: Drawable[]; shadow: Walker; scale: number; offset: V3 }
+interface Landmark { parts: LodSet<Drawable>[]; shadow: LodSet<Walker>; scale: number; offset: V3; center: V3 }
+// The building fills the view from the street, so it keeps full detail until it is well off:
+// full under about 120 m, a quarter of the triangles to about 300 m, then 6%
+const HSBC_LOD_PIXELS = [500, 200];
 let hsbc: Landmark | null = null;
 const solidTexture = (css: string) => {
   const c = document.createElement('canvas');
@@ -94,7 +130,9 @@ const solidTexture = (css: string) => {
   const scene = parseGlb(await res.arrayBuffer());
   const { batches, min, max } = flatten(scene);
   const white = solidTexture('#fff');
-  const parts: Drawable[] = [];
+  const scale = HSBC_HEIGHT / (max[1] - min[1]);
+  const radius = (Math.hypot(max[0] - min[0], max[1] - min[1], max[2] - min[2]) / 2) * scale;
+  const parts: LodSet<Drawable>[] = [];
   for (const b of batches) {
     const m = scene.materials[b.material];
     // glTF colour factors are linear; the world shader treats texture x vertex colour as sRGB
@@ -109,11 +147,14 @@ const solidTexture = (css: string) => {
       texture = renderer.tileTexture(bmp);
       bmp.close();
     }
-    const d = renderer.mesh({ positions: b.positions, normals: b.normals, uvs: b.uvs, colors, indices: b.indices }, texture);
-    d.doubleSided = true;
-    if (glass) d.emitTexture = solidTexture('rgb(115,102,75)'); // offices lit behind the glass at night (about as bright as the city's office windows)
-    if (/sign/i.test(m.name ?? '')) d.emissive = true; // illuminated sign
-    parts.push(d);
+    const sign = /sign/i.test(m.name ?? '');
+    const glow = glass ? solidTexture('rgb(115,102,75)') : undefined; // offices lit behind the glass at night (about as bright as the city's office windows)
+    const t = b.indices.length / 3;
+    const lods = await meshLods({ positions: b.positions, normals: b.normals, uvs: b.uvs, colors, indices: b.indices }, [t * 0.25, t * 0.06], texture, radius, (d) => {
+      if (glow) d.emitTexture = glow;
+      if (sign) d.emissive = true; // illuminated sign
+    });
+    parts.push({ ...lods, pixels: HSBC_LOD_PIXELS });
   }
   // One rigid "walker" of the whole building, for the planar ground shadow
   const n = batches.reduce((t, b) => t + b.positions.length / 3, 0);
@@ -127,39 +168,136 @@ const solidTexture = (css: string) => {
     vo += b.positions.length / 3;
     io += b.indices.length;
   }
-  const scale = HSBC_HEIGHT / (max[1] - min[1]);
+  const shadow = await walkerLods(all, [all.indices.length / 3 * 0.25, all.indices.length / 3 * 0.06], white, radius);
   // street-facing side (+z, the side with the exterior masts) towards the tram street
-  hsbc = { parts, shadow: renderer.walker(all, white), scale, offset: [-(min[0] + max[0]) / 2, -min[1], -(min[2] + max[2]) / 2] };
+  hsbc = { parts, shadow: { ...shadow, pixels: HSBC_LOD_PIXELS }, scale, offset: [-(min[0] + max[0]) / 2, -min[1], -(min[2] + max[2]) / 2], center: [HSBC_SITE.x, HSBC_HEIGHT / 2, HSBC_SITE.z] };
   // a solid block for the flying car (the masts and the roof crane stick out a little)
   const hx = ((max[0] - min[0]) / 2) * scale, hz = ((max[2] - min[2]) / 2) * scale;
   street.solids.push({ min: [HSBC_SITE.x - hx, 0, HSBC_SITE.z - hz], max: [HSBC_SITE.x + hx, HSBC_HEIGHT, HSBC_SITE.z + hz] });
 })().catch((e) => console.warn('HSBC building not loaded:', e));
 const NO_POSE = { hipR: [0, 0, 0], hipL: [0, 0, 0], kneeR: [0, 0, 0], kneeL: [0, 0, 0], hipAngleR: 0, hipAngleL: 0, kneeAngleR: 0, kneeAngleL: 0 };
 const UPRIGHT = qAxisAngle([0, 1, 0], 0);
-/** Draws the copies of the HSBC building near the camera; returns the matrix of the nearest one (for its shadow) */
-function drawHsbc(camX: number): Float32Array | null {
+/** Draws the copies of the HSBC building near the camera; returns the matrix and centre of the nearest one (for its shadow) */
+function drawHsbc(eye: V3): { matrix: Float32Array; center: V3 } | null {
   if (!hsbc) return null;
-  let nearest: Float32Array | null = null, best = Infinity;
+  let nearest: { matrix: Float32Array; center: V3 } | null = null, best = Infinity;
   for (const dx of OFFSETS) {
     const x = HSBC_SITE.x + dx;
-    const d = Math.abs(x - camX);
+    const d = Math.abs(x - eye[0]);
     if (d > 800) continue;
     const M = modelMatrix([x, 0, HSBC_SITE.z], UPRIGHT, hsbc.scale, hsbc.offset);
-    for (const p of hsbc.parts) renderer.draw(p, M);
-    if (d < best) { best = d; nearest = M; }
+    const center: V3 = [hsbc.center[0] + dx, hsbc.center[1], hsbc.center[2]];
+    for (const p of hsbc.parts) renderer.draw(lodPick(p, center, eye), M);
+    if (d < best) { best = d; nearest = { matrix: M, center }; }
   }
   return nearest;
 }
 const treeOffset = new Float32Array(16);
 /** Draws each tree once, in the copy of the street nearest the camera */
-function drawTrees(camX: number) {
+function drawTrees(eye: V3) {
   if (!treeModel) return;
+  const camX = eye[0];
   for (const M of treeModel.matrices) {
     const rel = wrapX(M[12] - camX); // trunk x relative to the camera, in the nearest copy
     if (Math.abs(rel) > 260) continue;
     treeOffset.set(M);
     treeOffset[12] = camX + rel;
-    renderer.draw(treeModel.drawable, treeOffset);
+    const d = lodPick(treeModel.lods, [camX + rel, TREE_HEIGHT / 2, M[14]], eye);
+    renderer.draw(d, treeOffset);
+  }
+}
+
+// ---- Traffic lights (public/traffic-light.glb, a Hong Kong signal pole with a pedestrian head and push button) ----
+// Four poles at each signal crossing: two before it on each kerb for the traffic coming that way. The head
+// faces the oncoming traffic (the model's lenses face +z). Each lamp is drawn either lit (unlit emissive, plus a
+// glow sprite) or off (dark glass), following the signal clock (tram/traffic-signal.ts).
+type Lamp = 'red' | 'amber' | 'green' | 'pedRed' | 'pedGreen';
+const LAMP_MATERIALS: Record<string, Lamp> = { LensRed: 'red', LensAmber: 'amber', LensGreen: 'green', PedRed: 'pedRed', PedGreen: 'pedGreen' };
+const LAMP_GLOW: Record<Lamp, V3> = { red: [1.0, 0.12, 0.08], amber: [1.0, 0.55, 0.05], green: [0.15, 1.0, 0.55], pedRed: [1.0, 0.12, 0.08], pedGreen: [0.15, 1.0, 0.55] };
+// heavy, tiny detail (cable runs, 73k of the 89k triangles) that cannot be seen from the street
+const SIGNAL_SKIP = /^(head_wire|back_conduit|box_conduit)$/;
+interface SignalPole { matrix: Float32Array; x: number }
+interface SignalModel {
+  body: Drawable[];
+  lamps: { lamp: Lamp; on: Drawable; off: Drawable; center: V3 }[];
+}
+let signalModel: SignalModel | null = null;
+const signalPoles: SignalPole[] = [];
+for (const c of SIGNAL_CROSSINGS) {
+  for (const z of [-7.5, 7.5]) {
+    // before the crossing for each direction: eastbound (+x) traffic sees the heads at c - 2.9 facing -x
+    signalPoles.push({ x: c - (ZEBRA_HALF + 0.9), matrix: modelMatrix([c - (ZEBRA_HALF + 0.9), 0.15, z], qAxisAngle([0, 1, 0], -Math.PI / 2), 1) });
+    signalPoles.push({ x: c + (ZEBRA_HALF + 0.9), matrix: modelMatrix([c + (ZEBRA_HALF + 0.9), 0.15, z], qAxisAngle([0, 1, 0], Math.PI / 2), 1) });
+  }
+}
+const signalGlows = Object.fromEntries((Object.keys(LAMP_GLOW) as Lamp[]).map((l) => [l, new ParticlePool(glCtx, renderer.particle, 64, 0, 0)])) as Record<Lamp, ParticlePool>;
+(async () => {
+  const res = await fetch('./traffic-light.glb');
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const scene = parseGlb(await res.arrayBuffer());
+  const prune = (n: typeof scene.root) => { n.children = n.children.filter((c) => !SIGNAL_SKIP.test(c.name ?? '')); n.children.forEach(prune); };
+  prune(scene.root);
+  const { batches, min, max } = flatten(scene);
+  const body: Drawable[] = [];
+  const lamps: SignalModel['lamps'] = [];
+  for (const b of batches) {
+    const m = scene.materials[b.material];
+    let texture = solidTexture('#fff');
+    if (m.image) {
+      const bmp = await createImageBitmap(m.image, { imageOrientation: 'none', premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
+      texture = renderer.tileTexture(bmp);
+      bmp.close();
+    }
+    const tint = (k: number) => {
+      const c = [0, 1, 2].map((i) => Math.pow(m.color[i], 1 / 2.2) * k);
+      const out = new Float32Array(b.positions.length);
+      for (let i = 0; i < out.length; i += 3) out.set(c, i);
+      return out;
+    };
+    const mesh = (k: number) => renderer.mesh({ positions: b.positions, normals: b.normals, uvs: b.uvs, colors: tint(k), indices: b.indices }, texture);
+    const lamp = LAMP_MATERIALS[m.name ?? ''];
+    if (!lamp) {
+      const d = mesh(1);
+      d.doubleSided = true;
+      body.push(d);
+      continue;
+    }
+    const on = mesh(1), off = mesh(0.16); // off: dark tinted glass
+    on.emissive = true;
+    on.doubleSided = off.doubleSided = true;
+    // lamp centre, a little in front of the lens (+z) for the glow sprite
+    const bb = bounds(b.positions);
+    lamps.push({ lamp, on, off, center: [bb.center[0], bb.center[1], bb.center[2] + bb.radius * 0.6] });
+  }
+  signalModel = { body, lamps };
+  // solid poles and heads for the flying car: the model's box turned with each pole
+  for (const p of signalPoles) {
+    const corners = [0, 1, 2, 3].map((i) => xform(p.matrix, [i & 1 ? max[0] : min[0], 0, i & 2 ? max[2] : min[2]]));
+    const xs = corners.map((c) => c[0]), zs = corners.map((c) => c[2]);
+    street.solids.push({ min: [Math.min(...xs), 0, Math.min(...zs)], max: [Math.max(...xs), max[1], Math.max(...zs)] });
+  }
+})().catch((e) => console.warn('Traffic lights not loaded:', e));
+const signalOffset = new Float32Array(16);
+/** Lit lamps on every head this frame */
+function lampLit(l: Lamp): boolean {
+  return signal[l];
+}
+/** Draws the signal poles in the copy of the street nearest the camera, with the lit lamps glowing */
+function drawSignals(eye: V3, night: number) {
+  for (const pool of Object.values(signalGlows)) pool.count = 0;
+  if (!signalModel) return;
+  for (const p of signalPoles) {
+    const rel = wrapX(p.x - eye[0]);
+    if (Math.abs(rel) > 260) continue;
+    signalOffset.set(p.matrix);
+    signalOffset[12] = p.matrix[12] + (eye[0] + rel - p.x);
+    for (const d of signalModel.body) renderer.draw(d, signalOffset);
+    for (const l of signalModel.lamps) {
+      const lit = lampLit(l.lamp);
+      renderer.draw(lit ? l.on : l.off, signalOffset);
+      // the glow carries further at night; in daylight just a bright core over the lens
+      if (lit) glow(signalGlows[l.lamp], xform(signalOffset, l.center), 0.55 + 0.5 * night, 0.55 + 0.45 * night);
+    }
   }
 }
 
@@ -200,7 +338,7 @@ const offsetMatrices = OFFSETS.map((dx) => new Float32Array([1, 0, 0, 0, 0, 1, 0
 // ---- Road traffic: taxis, buses and cars with simple car-following ----
 // lightY / halfW: headlight height and half spacing in metres; `mecha` marks a walking giant (drawn separately)
 interface Mecha {
-  rig: MechaRig; walker: Walker; phase: number; amount: number; zOffset: number; role: MechaRole;
+  rig: MechaRig; walker: LodSet<Walker>; phase: number; amount: number; zOffset: number; role: MechaRole;
   headHalf: number; // half width of the head (m), for lamp clearance
   inward: number; // current sidestep towards the road centre (m)
   turn: number; // body yaw while sidestepping (radians)
@@ -208,7 +346,9 @@ interface Mecha {
   eyeGlow: ParticlePool; // one sprite at the eye, additive
   stepCos: [number, number]; // last cos(phase) of each leg, to catch the moment a foot comes down
 }
-interface FleetEntry { model: Drawable; scale: number; len: number; lightY: number; halfW: number; mecha?: Mecha }
+// `lods`: simpler copies of a scanned vehicle (drawn instead of `model`, picked by distance)
+// `box`: the body in metres (nose +x, standing on y = 0), for the flying car to bump into; worked out on first use
+interface FleetEntry { model: Drawable; scale: number; len: number; lightY: number; halfW: number; mecha?: Mecha; lods?: LodSet<Drawable>; box?: { min: V3; max: V3 } }
 const fleet: FleetEntry[] = [
   { model: renderer.model(hkTaxi), scale: 2.0, len: 5, lightY: 0.7, halfW: 0.65 },
   { model: renderer.model(hkTaxi), scale: 2.0, len: 5, lightY: 0.7, halfW: 0.65 },
@@ -227,17 +367,50 @@ for (let i = 0; i < 28; i++) {
 // Ice cream van (scanned GLB model, 4.8 m, front = +x like the other vehicles): loads in the background,
 // then two vehicles, one per direction, turn into vans
 loadGlb('./icecream-van.glb')
-  .then((m) => {
+  .then(async (m) => {
     const texture = m.baseColorImage ? renderer.tileTexture(m.baseColorImage) : renderer.tileTexture(document.createElement('canvas'));
-    const model = renderer.mesh(m, texture);
-    model.doubleSided = true;
-    const kind = fleet.push({ model, scale: 1, len: m.max[0] - m.min[0], lightY: 0.8, halfW: 0.8 }) - 1;
+    const lods = await meshLods(m, [12000, 3000], texture, bounds(m.positions).radius);
+    const kind = fleet.push({ model: lods.levels[0], lods, scale: 1, len: m.max[0] - m.min[0], lightY: 0.8, halfW: 0.8, box: { min: [...m.min], max: [...m.max] } }) - 1;
     for (const lane of [0, 1]) {
       const v = vehicles.find((c) => c.lane === lane && fleet[c.kind].len < 6); // a car-sized slot
       if (v) { v.kind = kind; v.vmax = Math.min(v.vmax, 10); } // vans are in no hurry
     }
   })
   .catch((e) => console.warn('Ice cream van not loaded:', e));
+// Public light bus (Meshy scan van.glb, reduced to public/van.glb with its colours baked onto the vertices).
+// The scan is 1 unit long and centred on the origin: it is moved to stand on the road, scaled to a
+// minibus length and turned nose +x, then takes one car slot in each direction.
+const VAN_LENGTH = 6.0; // metres
+const VAN_NOSE_MINUS_X = false; // the scan's front already faces +x
+const BUILTIN_KINDS = fleet.length;
+loadGlb('./van.glb')
+  .then(async (m) => {
+    const s = VAN_LENGTH / (m.max[0] - m.min[0]);
+    const cx = (m.min[0] + m.max[0]) / 2, cz = (m.min[2] + m.max[2]) / 2;
+    const flip = VAN_NOSE_MINUS_X ? -1 : 1;
+    const positions = new Float32Array(m.positions.length), normals = new Float32Array(m.normals);
+    for (let i = 0; i < positions.length; i += 3) {
+      positions[i] = (m.positions[i] - cx) * s * flip;
+      positions[i + 1] = (m.positions[i + 1] - m.min[1]) * s;
+      positions[i + 2] = (m.positions[i + 2] - cz) * s * flip;
+      normals[i] *= flip;
+      normals[i + 2] *= flip;
+    }
+    const src = m.vertexColors;
+    const colors = src ? src.map((x) => Math.pow(Math.max(0, x), 1 / 2.2)) : undefined; // linear -> sRGB
+    const lods = await meshLods({ positions, normals, uvs: m.uvs, colors, indices: m.indices }, [15000, 3500], solidTexture('#fff'), bounds(positions).radius);
+    const halfW = (m.max[2] - m.min[2]) * s * 0.35;
+    // positions are centred in x and z and stand on y = 0
+    const vw = ((m.max[2] - m.min[2]) * s) / 2, vh = (m.max[1] - m.min[1]) * s;
+    const box = { min: [-VAN_LENGTH / 2, 0, -vw] as V3, max: [VAN_LENGTH / 2, vh, vw] as V3 };
+    const kind = fleet.push({ model: lods.levels[0], lods, scale: 1, len: VAN_LENGTH, lightY: 0.9, halfW, box }) - 1;
+    for (const lane of [1, 0]) {
+      // a car-sized slot from the built-in fleet (not one the ice cream van took)
+      const v = vehicles.find((c) => c.lane === lane && c.kind < BUILTIN_KINDS && fleet[c.kind].len < 6);
+      if (v) v.kind = kind;
+    }
+  })
+  .catch((e) => console.warn('Van not loaded:', e));
 
 // ---- Walking mechas: Meshy AI image-to-3D scans with automatically rigged legs (see tram/mecha-walker.ts) ----
 // Each one takes a car's place in a traffic lane (the cars behind queue up). They are sized to fit between the
@@ -265,9 +438,12 @@ async function loadMecha(def: (typeof MECHAS)[number]) {
   const rig = rigMecha(await res.arrayBuffer());
   if (!rig.image) throw new Error('no base colour texture');
   const bmp = await createImageBitmap(rig.image, { imageOrientation: 'none', premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
-  const walker = renderer.walker(rig.mesh, renderer.tileTexture(bmp));
+  const texture = renderer.tileTexture(bmp);
   bmp.close();
   const scale = def.height / (rig.max[1] - rig.min[1]);
+  // 2-3 million triangles close up; 300k and 60k further off. The simpler copies keep the leg weights.
+  const radius = (Math.hypot(rig.max[0] - rig.min[0], rig.max[1] - rig.min[1], rig.max[2] - rig.min[2]) / 2) * scale;
+  const walker = await walkerLods(rig.mesh, [300000, 60000], texture, radius);
   const width = (rig.max[0] - rig.min[0]) * scale;
   const len = (rig.max[2] - rig.min[2]) * scale; // its depth: walking along x, the model's z becomes the length
   // Keep its inner side clear of the tram (tram side at |z| = 3.1)
@@ -349,13 +525,13 @@ function footstep(v: Vehicle, f: FleetEntry, leg: 0 | 1, eye: V3) {
   shake = Math.max(shake, 0.22 * m.amount * Math.max(0, 1 - d / 70));
 }
 
-// ---- Flying car: the Meshy AI red sports car (public/flying-car.glb). The scan's texture is a mosaic of tiny
-// islands, so scripts/decimate-glb.ts bakes those colours onto the vertices (about 70k triangles) instead of
-// keeping the atlas. Four lift jets hold it up. It hovers until the flying camera (F) hands you the controls:
-// W/S or arrows to drive, A/D or arrows to steer, Space/E up, Shift/Q down. The nose points along -x.
-const CAR_LENGTH = 4.6; // metres, about a Tesla Model S
-const CAR_MODEL_YAW = Math.PI; // the Meshy model's nose points along -x: turn it to +x
-interface CarModel { parts: Drawable[]; shadow: Walker; scale: number; offset: V3; jets: V3[]; heads: V3[]; tails: V3[] }
+// ---- Flying car: the red roadster with a dog at the wheel (src/red_roadster_with_dog.glb, reduced to
+// public/flying-car.glb). The scan's texture is a mosaic of islands, so the reduced mesh keeps those colours
+// on the vertices. Four lift jets hold it up. It hovers until the flying camera (F) hands you the controls:
+// W/S or arrows to drive, A/D or arrows to steer, Space/E up, Shift/Q down.
+const CAR_LENGTH = 4.6; // metres
+const CAR_MODEL_YAW = 0; // red_car.glb's nose already points along +x
+interface CarModel { parts: LodSet<Drawable>[]; shadow: LodSet<Walker>; scale: number; offset: V3; jets: V3[]; heads: V3[]; tails: V3[] }
 let carModel: CarModel | null = null;
 // starts hovering low over the middle of the road, level with the street lamps: the tram wires (z = +-2.1) and
 // the lamp heads (z = +-5.3) are clear of the 2.2 m wide body there
@@ -371,18 +547,19 @@ heightUi.slider.addEventListener('input', () => { flyer.hold = Number(heightUi.s
 heightUi.slider.value = String(flyer.hold);
 showHeight();
 loadGlb('./flying-car.glb')
-  .then((m) => {
+  .then(async (m) => {
     // Baked colours are linear; the world shader treats vertex colour as sRGB.
     const src = m.vertexColors;
     const colors = src ? new Float32Array(src.length) : undefined;
     if (src && colors) for (let i = 0; i < src.length; i++) colors[i] = Math.pow(Math.max(0, src[i]), 1 / 2.2);
-    const body = renderer.mesh({ positions: m.positions, normals: m.normals, uvs: m.uvs, colors, indices: m.indices }, solidTexture('#fff'));
-    body.doubleSided = true;
     const s = CAR_LENGTH / (m.max[0] - m.min[0]);
     const W = (m.max[2] - m.min[2]) * s, H = (m.max[1] - m.min[1]) * s;
+    const radius = bounds(m.positions).radius * s;
+    const white = solidTexture('#fff');
+    const body = await meshLods({ positions: m.positions, normals: m.normals, uvs: m.uvs, colors, indices: m.indices }, [20000, 5000], white, radius);
     flyer.resize([CAR_LENGTH / 2, H / 2, W / 2]);
     const n = m.positions.length / 3;
-    const shadow = renderer.walker({ positions: m.positions, normals: m.normals, uvs: m.uvs, indices: Uint32Array.from(m.indices), rig: new Float32Array(n * 2) }, solidTexture('#fff'));
+    const shadow = await walkerLods({ positions: m.positions, normals: m.normals, uvs: m.uvs, indices: Uint32Array.from(m.indices), rig: new Float32Array(n * 2) }, [20000, 5000], white, radius);
     // points in the car's frame (metres from the centre of the underside, nose along +x)
     const L = CAR_LENGTH;
     const jets: V3[] = [];
@@ -407,7 +584,6 @@ function flyInput(): FlyInput {
     lift: (held('Space', 'KeyE') ? 1 : 0) - (held('ShiftLeft', 'ShiftRight', 'KeyQ') ? 1 : 0),
   };
 }
-(window as any).dbgSnap = (yaw = 0, pitch = 0.2, dist = 12) => { orbit.yaw = behindCar() + yaw; orbit.pitch = pitch; orbit.dist = dist; goal = null; flyLook = yaw; }; // TEMP-FLY
 let carX = flyer.pos[0]; // x of the copy of the car drawn this frame (nearest the camera)
 const carPos = (): V3 => [carX, flyer.pos[1] + Math.sin(time * 1.7) * 0.08 * (1 - Math.min(1, flyer.speed / 6)), flyer.pos[2]];
 const carRotation = () => qMul(flyer.rotation, qAxisAngle([0, 1, 0], CAR_MODEL_YAW));
@@ -415,9 +591,46 @@ function carMatrix(): Float32Array | null {
   if (!carModel) return null;
   return modelMatrix(carPos(), carRotation(), carModel.scale, carModel.offset);
 }
+/** Body box of a fleet kind in metres (nose +x, on the ground), from its model the first time it is asked for */
+function fleetBox(f: FleetEntry): { min: V3; max: V3 } | null {
+  if (f.box) return f.box;
+  if (f.mecha) {
+    // the mecha model faces +z and walks along x: its depth (z) is the length, its width (x) goes across
+    const { min, max } = f.mecha.rig, s = f.scale;
+    const L = (max[2] - min[2]) * s / 2, W = (max[0] - min[0]) * s / 2;
+    return (f.box = { min: [-L, 0, -W], max: [L, (max[1] - min[1]) * s, W] });
+  }
+  const data = (f.model as Drawable & { data?: { positions: Float32Array } }).data;
+  if (!data) return null;
+  const P = data.positions, mn: V3 = [Infinity, Infinity, Infinity], mx: V3 = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < P.length; i += 3) for (let k = 0; k < 3; k++) { mn[k] = Math.min(mn[k], P[i + k]); mx[k] = Math.max(mx[k], P[i + k]); }
+  return (f.box = { min: scale(mn, f.scale) as V3, max: scale(mx, f.scale) as V3 });
+}
+// Trams, road vehicles and mechas as boxes for the flying car to bounce off (rebuilt every frame, they move)
+const obstacleList: Obstacle[] = [];
+function streetObstacles(): Obstacle[] {
+  obstacleList.length = 0;
+  for (const t of trams) {
+    obstacleList.push({ min: [t.x - TRAM.L, RAIL_TOP, t.z - TRAM.W], max: [t.x + TRAM.L, RAIL_TOP + TRAM.YS, t.z + TRAM.W], vel: [t.v * t.dir, 0, 0] });
+  }
+  for (const v of vehicles) {
+    const f = fleet[v.kind];
+    if (!f.mecha && !ui.traffic.checked) continue; // hidden traffic is not there to hit
+    const b = fleetBox(f);
+    if (!b) continue;
+    const dir = v.lane === 0 ? 1 : -1;
+    let z = LANES[v.lane];
+    if (f.mecha) z = Math.sign(z) * (Math.abs(z) + f.mecha.zOffset - f.mecha.inward);
+    // westbound vehicles are turned round: their box is mirrored in x and z
+    const x0 = dir > 0 ? b.min[0] : -b.max[0], x1 = dir > 0 ? b.max[0] : -b.min[0];
+    const z0 = dir > 0 ? b.min[2] : -b.max[2], z1 = dir > 0 ? b.max[2] : -b.min[2];
+    obstacleList.push({ min: [v.x + x0, b.min[1], z + z0], max: [v.x + x1, b.max[1], z + z1], vel: [dir * Math.max(0, v.v), 0, 0] });
+  }
+  return obstacleList;
+}
 function updateCar(dt: number, flying: boolean, eye: V3) {
   const holdBefore = flyer.hold;
-  flyer.update(dt, flying ? flyInput() : NO_INPUT, street.solids, PERIOD);
+  flyer.update(dt, flying ? flyInput() : NO_INPUT, street.solids, PERIOD, streetObstacles());
   if (flyer.hold !== holdBefore && document.activeElement !== heightUi.slider) {
     heightUi.slider.value = String(Math.min(Number(heightUi.slider.max), flyer.hold));
     showHeight();
@@ -425,9 +638,21 @@ function updateCar(dt: number, flying: boolean, eye: V3) {
   flyer.pos[0] = wrapX(flyer.pos[0]);
   if (flyer.impact > 3) shake = Math.max(shake, Math.min(0.5, flyer.impact * 0.04));
   flyer.impact = 0;
-  // the copy nearest the camera; particles move with it when that changes
-  const x = eye[0] + wrapX(flyer.pos[0] - eye[0]);
-  if (x !== carX) { flames.shift(x - carX); jetWash.shift(x - carX); }
+  // Which copy of the car to draw. Flying, the camera follows the car, so it must stay in the middle copy of the
+  // street (x in [-S, S)): the street is only drawn three times, and a car that kept going would fly off the end.
+  // Otherwise draw the copy nearest the camera.
+  const x = flying ? flyer.pos[0] : eye[0] + wrapX(flyer.pos[0] - eye[0]);
+  const jump = Math.round((x - carX) / PERIOD) * PERIOD; // a whole street length when it wraps, else 0
+  if (jump !== 0) {
+    // move everything that lives in world space near the camera by the same amount, so the jump is not seen
+    flames.shift(jump);
+    jetWash.shift(jump);
+    if (flying) {
+      petals.shift(jump);
+      dust.shift(jump);
+      if (prevEye) prevEye[0] += jump;
+    }
+  }
   carX = x;
   flames.update(dt);
   jetWash.update(dt);
@@ -570,6 +795,16 @@ const CAR_DECEL = 6;
 const TRAM_DECEL = 1.1 * 1.6;
 /** Distance from the front to the stop line of the next occupied crossing this mover can still stop for */
 // queueRear: rear of a slow vehicle ahead; cars do not stop on the stripes when the queue has no room past them
+// Traffic lights: one clock for both signal crossings. It starts late in the green so the first change comes
+// soon after the page opens.
+let signalClock = 40;
+let signal = signalAt(signalClock);
+const pedWalk = CROSSINGS.map(() => true); // per crossing: may people step off the kerb
+function updateSignals(dt: number) {
+  signalClock += dt;
+  signal = signalAt(signalClock);
+  CROSSINGS.forEach((c, i) => (pedWalk[i] = !SIGNAL_CROSSINGS.includes(c) || signal.walk));
+}
 function zebraGap(x: number, dir: number, half: number, v: number, decel: number, queueRear: number | null = null) {
   let best = Infinity;
   CROSSINGS.forEach((c, i) => {
@@ -577,7 +812,8 @@ function zebraGap(x: number, dir: number, half: number, v: number, decel: number
     const gap = (cx - dir * (ZEBRA_HALF + 1.2) - (x + dir * half)) * dir;
     const room = queueRear === null ? Infinity : ((((queueRear - (cx + dir * (ZEBRA_HALF + 0.5))) * dir) % PERIOD) + PERIOD) % PERIOD;
     const jammed = gap < 40 && room < 2 * half + 1;
-    if (!peds.blocked[i] && !jammed) return;
+    const red = SIGNAL_CROSSINGS.includes(c) && gap > -1.25 && mustStop(signal, gap, v, decel);
+    if (!peds.blocked[i] && !jammed && !red) return;
     // still stops if it crept past the line, unless it can no longer stop before the stripes
     if (gap > -1.25 && gap + 1.2 >= (v * v) / (2 * decel) - 0.3) best = Math.min(best, gap);
   });
@@ -613,6 +849,7 @@ const ui = {
   petals: $<HTMLInputElement>('petals'),
   traffic: $<HTMLInputElement>('traffic'),
   peds: $<HTMLInputElement>('peds'),
+  lod: $<HTMLInputElement>('lod'),
   autoBell: $<HTMLInputElement>('autobell'),
 };
 ui.speed.addEventListener('input', () => ($('speed-val').textContent = ui.speed.value));
@@ -1074,9 +1311,27 @@ resize();
 // ---- HUD ----
 const hud = { spd: $('spd'), state: $('state'), next: $('next'), pos: $('pos'), clock: $('clock') };
 let hudTimer = 0;
+const lodStats = $('lod-stats');
+// Frames per second, counted over half-second windows so the number is steady enough to read
+const fpsLabel = $('fps');
+const fpsCount = { frames: 0, since: performance.now() };
+function updateFps(now: number) {
+  fpsCount.frames++;
+  const span = now - fpsCount.since;
+  if (span < 500) return;
+  const fps = (fpsCount.frames * 1000) / span;
+  fpsLabel.textContent = `${fps < 10 ? fps.toFixed(1) : Math.round(fps)} fps · ${(span / fpsCount.frames).toFixed(1)} ms`;
+  fpsLabel.style.color = fps >= 50 ? '#86efac' : fps >= 30 ? '#fde047' : '#fca5a5'; // green / yellow / red
+  fpsCount.frames = 0;
+  fpsCount.since = now;
+}
 function updateHud(dt: number) {
   if ((hudTimer -= dt) > 0) return;
   hudTimer = 0.15;
+  const k = (n: number) => `${Math.round(n / 1000).toLocaleString()}k`;
+  lodStats.textContent = lodCount.full
+    ? `${k(lodCount.drawn)} / ${k(lodCount.full)}（${Math.round((100 * lodCount.drawn) / lodCount.full)}%）`
+    : '…';
   const { stop, dist } = nextStop(main);
   const flying = mode === 'fly';
   hud.spd.textContent = `${Math.round((flying ? flyer.speed : main.v) * 3.6)} km/h`;
@@ -1099,6 +1354,7 @@ function frame(now: number) {
   last = now;
   time += dt;
 
+  updateSignals(dt);
   for (const t of trams) updateTram(t, dt);
   if (ui.traffic.checked) updateTraffic(dt);
   updateMechas(dt); // the mechas walk even with road traffic switched off
@@ -1131,7 +1387,7 @@ function frame(now: number) {
       if (mecha || ui.traffic.checked) movers.push({ x: v.x, dir: v.lane === 0 ? 1 : -1, v: v.v, half: fleet[v.kind].len / 2, decel: mecha ? 0.05 : CAR_DECEL });
     }
     const active = 0.3 + 0.7 * (1 - tod.night); // fewer people out late at night
-    peds.update(dt, { movers, rain: weather.rain, active });
+    peds.update(dt, { movers, rain: weather.rain, active, walk: pedWalk });
     crowd.count = peds.write(crowd.instances, cam.pos, active, weather.rain);
   } else {
     peds.blocked.fill(false);
@@ -1150,8 +1406,10 @@ function frame(now: number) {
   renderer.drawSky(state);
   renderer.beginWorld(state);
   for (const m of offsetMatrices) for (const d of statics) renderer.draw(d, m);
-  drawTrees(cam.pos[0]);
-  const hsbcMatrix = drawHsbc(cam.pos[0]);
+  lodCount.drawn = lodCount.full = 0;
+  drawTrees(cam.pos);
+  drawSignals(cam.pos, tod.night);
+  const hsbcDrawn = drawHsbc(cam.pos);
   for (const dx of OFFSETS) for (const t of trams) {
     renderer.draw(t.model, tramMatrix(t, dx));
     renderer.draw(wiperModel, wiperMatrix(t, dx));
@@ -1168,26 +1426,31 @@ function frame(now: number) {
         if (Math.abs(wrapX(v.x - cam.pos[0])) > 600) continue;
         const { pose, drop } = walkPose(m.rig, m.phase, m.amount);
         const matrix = mechaMatrix(v, f, cam.pos[0], drop);
-        renderer.drawWalker(state, m.walker, matrix, pose);
-        mechaShadows.push({ walker: m.walker, model: matrix, pose });
+        const walker = lodPick(m.walker, xform(matrix, [(m.rig.min[0] + m.rig.max[0]) / 2, (m.rig.min[1] + m.rig.max[1]) / 2, (m.rig.min[2] + m.rig.max[2]) / 2]), cam.pos);
+        renderer.drawWalker(state, walker, matrix, pose);
+        mechaShadows.push({ walker, model: matrix, pose });
         // eye glow: pulses slowly, brighter in the dark and in the rain
         m.eyeGlow.count = 0;
         const pulse = 0.75 + 0.25 * Math.sin(time * 2.6 + v.x);
         m.eyeGlow.emit(xform(matrix, m.rig.eye), [0, 0, 0], { life: 1, size0: 1.1, size1: 1.1, alpha: pulse * (0.45 + 0.9 * tod.night + 0.3 * weather.rain) });
         continue;
       }
-      for (const dx of OFFSETS) renderer.draw(f.model, modelMatrix([v.x + dx, 0, LANES[v.lane]], qAxisAngle([0, 1, 0], heading), f.scale));
+      for (const dx of OFFSETS) {
+        const model = f.lods ? lodPick(f.lods, [v.x + dx, 1.2, LANES[v.lane]], cam.pos) : f.model;
+        renderer.draw(model, modelMatrix([v.x + dx, 0, LANES[v.lane]], qAxisAngle([0, 1, 0], heading), f.scale));
+      }
     }
   }
   const flyMatrix = carMatrix();
   if (carModel && flyMatrix) {
-    for (const p of carModel.parts) renderer.draw(p, flyMatrix);
-    mechaShadows.push({ walker: carModel.shadow, model: flyMatrix, pose: NO_POSE });
+    const at = carPos();
+    for (const p of carModel.parts) renderer.draw(lodPick(p, at, cam.pos), flyMatrix);
+    mechaShadows.push({ walker: lodPick(carModel.shadow, at, cam.pos), model: flyMatrix, pose: NO_POSE });
   }
   renderer.drawCrowd(state, crowd);
   // Mecha shadows from the sun (or moon): darker in strong sunlight, faint under cloud, rain or at night
   const sunLum = (lit.sunColor[0] + lit.sunColor[1] + lit.sunColor[2]) / 3;
-  if (hsbc && hsbcMatrix) mechaShadows.push({ walker: hsbc.shadow, model: hsbcMatrix, pose: NO_POSE });
+  if (hsbc && hsbcDrawn) mechaShadows.push({ walker: lodPick(hsbc.shadow, hsbcDrawn.center, cam.pos), model: hsbcDrawn.matrix, pose: NO_POSE });
   renderer.drawWalkerShadows(state, mechaShadows, tod.lightDir, 0.12 + 0.48 * Math.min(1, sunLum / 1.2));
   renderer.drawParticles(state, jetWash, noFlame);
   renderer.drawParticles(state, dust, flames); // footstep dust, then the flying car's jet flames (additive)
@@ -1198,6 +1461,7 @@ function frame(now: number) {
   }
   renderer.drawGlows(state, lampGlow, [1.0, 0.78, 0.5]);
   renderer.drawGlows(state, beaconGlow, [1.0, 0.6, 0.1]);
+  for (const l of Object.keys(signalGlows) as Lamp[]) renderer.drawGlows(state, signalGlows[l], LAMP_GLOW[l]);
   renderer.drawGlows(state, headGlow, [1.0, 0.97, 0.88]);
   renderer.drawGlows(state, tailGlow, [0.9, 0.06, 0.04]);
   renderer.drawPetals(state, petals);
@@ -1213,6 +1477,7 @@ function frame(now: number) {
       wall: lit.ambSky.map((a, i) => a * 1.3 + lit.sunColor[i] * 0.08 + lights.emit * [0.35, 0.3, 0.22][i] + flash * 0.5) as V3,
     });
   }
+  updateFps(now);
   updateHud(dt);
   drawRadar();
   requestAnimationFrame(frame);
