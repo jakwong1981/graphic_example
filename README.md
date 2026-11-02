@@ -22,6 +22,8 @@ Interactive WebGL2 demos that show the principles and calculations behind render
 | `image-to-3d-demo.html` | 3 | 2D picture -> 3D relief: heuristic or uploaded depth map, displaced grid, edge tearing, GLB export |
 | `car-uv-demo.html` | 3 | Models built in code with one painted UV atlas each: car, HK taxi (curved body), KMB bus, building, ship, airplane; UV checker, wireframe overlay, GLB export |
 | `flight-sim-demo.html` | 4 | 飛行模擬器: jet over a Hong Kong-style harbour city with flight physics, traffic, jet effects, weather, sound and music |
+| `tram-demo.html` | 4 | 香港電車 #80: double-decker tram on a sakura-lined street - drive it, meet road traffic, cross at the kerb and signal crossings, mecha walkers, weather, day/night, and fly the Meshy AI sports car |
+| `zaku-demo.html` | - | MS-06S 夏亞專用渣古 II: Meshy AI image-to-3D PBR mecha model in a studio, lit with shadows and per-view lighting |
 
 ### Demo controls
 
@@ -56,6 +58,32 @@ Interactive WebGL2 demos that show the principles and calculations behind render
 - **Sound** (`src/sim/audio.ts`): Web Audio synthesis (engine, turbine whine, afterburner, wind, rain, thunder, explosion, stall horn). Starts after the first key press or click.
 - **Music** (`src/sim/music.ts`): streams the YouTube video through the official IFrame player (no download). Needs internet, and the video owner must allow embedding.
 
+### Hong Kong tram street (`tram-demo.html`)
+
+The Transport Department tram #80 "City of Charm" on a sakura-lined street with The Pawn, neon signs, the Bank of China Tower and the HSBC building behind it.
+
+- **Tram** (`src/models/hk-tram.ts`, `src/tram/street.ts`): UV-textured double-decker tram driving the street grid, stopping at the stops, capped at 40 km/h, ringing the bell while running, wipers / rain / windscreen, headlights and the driver's cab view.
+- **City** (`src/tram/storefronts.ts`, `src/tram/signs.ts`, `src/tram/sakura.ts`): storefronts, street lamps, neon signs, falling sakura petals, HSBC / Bank of China Tower landmarks.
+- **Traffic** (`src/tram/traffic-signal.ts`): traffic lights at the signal crossings, red man for pedestrians.
+- **Crowd** (`src/tram/pedestrians.ts`): pedestrians waiting at the kerb and crossing.
+- **Mecha walkers** (`src/tram/mecha-walker.ts`): Meshy AI mechas patrol the street and sidestep the street lamps; the camera can follow one.
+- **Flying car** (`src/tram/flying-car.ts`): Meshy AI sports car with jet thrusters; the camera can fly it over the street, height 0.6-60 m.
+
+| Key | Action |
+|-----|--------|
+| `P` | Tram drive toggle |
+| `Space` | Ring the bell (while driving) / fly up (while flying) |
+| `Shift` / `Q` | Fly down / up (while flying) |
+| `W` / `S` / `A` / `D` | Fly throttle / steer (while flying) |
+| `F` | Camera: street <-> fly the car |
+| `V` | Camera: street <-> upper deck |
+| `C` | Camera: street <-> driver's cab |
+| `H` | Headlights cycle: auto / on / off |
+| `W` | Wiper mode cycle: auto / on / off |
+| `M` | Music toggle |
+| `1` / `2` / `3` | Weather: sunny / cloudy / rain |
+| `N` | Day / night |
+
 ## Requirements
 
 - Node.js 18+ and npm
@@ -87,8 +115,9 @@ graphic_example/
 ├── index.html, vertex-demo.html, fragment-demo.html, combined-demo.html,
 │   donut-uv-demo.html, donut-procedural-demo.html,
 │   model-demo.html, image-to-3d-demo.html, car-uv-demo.html,
-│   flight-sim-demo.html                             # one entry page per demo
+│   flight-sim-demo.html, tram-demo.html, zaku-demo.html          # one entry page per demo
 ├── public/icecream-van.glb   # 18.6 MB model, copied to dist/ as is
+├── public/traffic-light.glb, public/flying-car.glb, public/hsbc.glb  # runtime-loaded street models
 ├── vite.config.ts            # multi-page build (one rollup input per HTML page)
 ├── tsconfig.json, package.json
 ├── scripts/                  # build.sh, deploy.sh
@@ -103,12 +132,17 @@ graphic_example/
     ├── main-image-to-3d-demo.ts       # 2D picture -> 3D relief
     ├── main-car-uv-demo.ts            # UV atlas model gallery
     ├── main-flight-sim.ts             # flight simulator
+    ├── main-tram-demo.ts              # Hong Kong tram street (tram, traffic, mechas, flying car, radar)
+    ├── main-zaku-demo.ts              # Meshy AI mecha studio
     ├── loaders/glb.ts                 # GLB parser: chunks, accessors, node transforms, embedded PNG
     ├── image3d/                       # depth estimation, relief mesh, GLB exporter
     ├── models/                        # atlas.ts + builder.ts (box, cylinder, parametric surface)
-    │                                  # car, hk-taxi, kmb-bus, building, ship, airplane
+    │                                  # car, hk-taxi, kmb-bus, building, ship, airplane, hk-tram
     ├── sim/                           # flight sim: physics, city, city-builder, city-textures,
-    │                                  # traffic, particles, effects, weather, audio, music, scene-renderer
+    │                                  # traffic, particles, effects, weather, audio, music, scene-renderer, lod
+    ├── tram/                          # tram street: street, sakura, storefronts, signs, mechas, traffic
+    │                                  # signals, flying car, pedestrians, wiper, car paint
+    ├── zaku/                          # Meshy AI mecha: GLB refine, walker views, studio lighting
     ├── demo.css
     ├── glsl.d.ts                      # typings for `?raw` GLSL imports
     ├── shaders/                       # GLSL ES 3.00 sources
