@@ -19,6 +19,7 @@ import { loadGlb } from './loaders/glb';
 import { rigMecha, walkPose, strideRate, MechaRig } from './tram/mecha-walker';
 import { buildStreet, STREET_HALF, TRACKS, LANES, RAIL_TOP, CROSSINGS, ZEBRA_HALF, HSBC_SITE, SIGNAL_CROSSINGS } from './tram/street';
 import { signalAt, mustStop } from './tram/traffic-signal';
+import { EngineSound } from './tram/engine-sound';
 import { parseGlb, flatten } from './zaku/gltf-scene';
 import { Pedestrians, Mover, buildPersonMesh } from './tram/pedestrians';
 import { FlyingCar, FlyInput, NO_INPUT, Obstacle } from './tram/flying-car';
@@ -850,6 +851,7 @@ const ui = {
   traffic: $<HTMLInputElement>('traffic'),
   peds: $<HTMLInputElement>('peds'),
   lod: $<HTMLInputElement>('lod'),
+  engine: $<HTMLInputElement>('engine'),
   autoBell: $<HTMLInputElement>('autobell'),
 };
 ui.speed.addEventListener('input', () => ($('speed-val').textContent = ui.speed.value));
@@ -952,6 +954,18 @@ const bell = {
   },
 };
 $('bell').addEventListener('click', () => { bell.start(); bell.ring(); });
+// ---- Flying car engine (tram/engine-sound.ts), on the bell's audio context once a gesture has unlocked it ----
+let engine: EngineSound | null = null;
+function updateEngine(dt: number, flying: boolean, eye: V3) {
+  const ctx = bell.ctx;
+  if (!ctx || ctx.state !== 'running') return;
+  engine ??= new EngineSound(ctx);
+  // full volume in the chase view, fading with distance otherwise; silent when switched off or the tab is hidden
+  const d = lodDistance(carPos(), eye);
+  const near = 1 / (1 + Math.max(0, d - 6) / 12);
+  const volume = ui.engine.checked && !document.hidden ? (flying ? 1 : 0.6) * near : 0;
+  engine.update(dt, Math.hypot(flyer.vel[0], flyer.vel[2]), flying ? flyInput().throttle : 0, volume);
+}
 // Browsers only allow sound after a user gesture: unlock audio on the first click or key press anywhere
 for (const ev of ['pointerdown', 'keydown'] as const) addEventListener(ev, () => bell.start(), { once: true });
 
@@ -1372,6 +1386,7 @@ function frame(now: number) {
   dust.update(dt);
   const camVel = prevEye ? scale(sub(cam.pos, prevEye), 1 / Math.max(dt, 1e-3)) : [0, 0, 0];
   prevEye = [...cam.pos];
+  updateEngine(dt, mode === 'fly', cam.pos);
   if (weather.rain > 0.02) rain.update(dt, cam.pos, Math.hypot(...camVel) > 200 ? [0, 0, 0] : camVel);
 
   updateClock(dt);
