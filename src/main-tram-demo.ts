@@ -373,7 +373,7 @@ loadGlb('./icecream-van.glb')
     const lods = await meshLods(m, [12000, 3000], texture, bounds(m.positions).radius);
     const kind = fleet.push({ model: lods.levels[0], lods, scale: 1, len: m.max[0] - m.min[0], lightY: 0.8, halfW: 0.8, box: { min: [...m.min], max: [...m.max] } }) - 1;
     for (const lane of [0, 1]) {
-      const v = vehicles.find((c) => c.lane === lane && fleet[c.kind].len < 6); // a car-sized slot
+      const v = vehicles.find((c) => c.lane === lane && !fleet[c.kind].mecha && fleet[c.kind].len < 6); // a car-sized slot
       if (v) { v.kind = kind; v.vmax = Math.min(v.vmax, 10); } // vans are in no hurry
     }
   })
@@ -422,11 +422,12 @@ loadGlb('./van.glb')
 // Both ease towards the road centre to keep their heads clear of the street lamp arms (see avoidLamps).
 type MechaRole = 'walk' | 'oncoming';
 const MECHAS = [
+  // Web-sized copies of the scans (about 150k triangles and a 1k texture each).
   // start: metres ahead of the #80 tram at load time (negative: behind it, in view of the default street camera)
   // eye: colour of the eye glow (linear RGB)
-  { url: './Meshy_AI_Red_Mecha_Zaku_1031004947_image-to-3d-texture.glb', name: '渣古 Zaku', height: 8.5, lane: 0 as const, role: 'walk' as MechaRole, start: 45, eye: [1.0, 0.1, 0.45] },
-  { url: './Meshy_AI_gundam_mecha_model_1031011724_image-to-3d-texture.glb', name: '精神感應 Mk-II', height: 8, lane: 1 as const, role: 'oncoming' as MechaRole, start: 160, eye: [0.25, 1.0, 0.45] },
-  { url: './Meshy_AI_Mecha_Figure_1031021918_image-to-3d-texture.glb', name: '機械人 Mecha Figure', height: 8.5, lane: 0 as const, role: 'walk' as MechaRole, start: -30, eye: [0.3, 0.75, 1.0] },
+  { url: './models/tram-zaku.glb', name: '渣古 Zaku', height: 8.5, lane: 0 as const, role: 'walk' as MechaRole, start: 45, eye: [1.0, 0.1, 0.45] },
+  { url: './models/tram-gundam.glb', name: '精神感應 Mk-II', height: 8, lane: 1 as const, role: 'oncoming' as MechaRole, start: 160, eye: [0.25, 1.0, 0.45] },
+  { url: './models/tram-mecha-figure.glb', name: '機械人 Mecha Figure', height: 8.5, lane: 0 as const, role: 'walk' as MechaRole, start: -30, eye: [0.3, 0.75, 1.0] },
 ];
 const ONCOMING_START = 160; // the Psycho Mk-II comes round again this far ahead of the tram
 const ONCOMING_END = -70; // and is sent round again once it is this far behind
@@ -470,14 +471,17 @@ async function loadMecha(def: (typeof MECHAS)[number]) {
   mechaNames.set(v, def.name);
   return def.name;
 }
-// Load one after the other: each file is 75-120 MB
+// Download the 5 MB web copies in parallel so one scan does not block the others.
 (async () => {
   const done: string[] = [];
-  for (const def of MECHAS) {
-    mechaStatus.textContent = `載入 Loading ${def.name}…`;
+  mechaStatus.textContent = `載入 Loading 0/${MECHAS.length} mechas…`;
+  await Promise.all(MECHAS.map(async (def) => {
     try { done.push(await loadMecha(def)); } catch (e) { console.warn(`${def.name} not loaded:`, e); }
-  }
-  mechaStatus.textContent = done.length ? `${done.join(' + ')} 行緊 walking` : '載入失敗 Not loaded';
+    mechaStatus.textContent = done.length
+      ? `${done.join(' + ')} 行緊 walking (${done.length}/${MECHAS.length})`
+      : `載入 Loading 0/${MECHAS.length} mechas…`;
+  }));
+  if (!done.length) mechaStatus.textContent = '載入失敗 Not loaded';
 })();
 // ---- Mecha effects: ground shadows, eye glow, footstep dust / splashes and a little camera shake ----
 const dust = new ParticlePool(glCtx, renderer.particle, 1500, 1.4, 0.25);
