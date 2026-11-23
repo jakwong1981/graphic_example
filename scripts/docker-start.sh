@@ -24,6 +24,14 @@ remove_containers() {
   fi
 }
 
+# Docker copies the working tree, so restore binary LFS assets before building;
+# otherwise the app serves small pointer text files instead of the 3D models.
+if ! command -v git-lfs >/dev/null 2>&1; then
+  echo "Git LFS is required to download the GLB models." >&2
+  exit 1
+fi
+git lfs pull
+
 # Free the requested host port from existing Docker containers, then remove
 # any stopped or differently configured instance of this app's container.
 remove_containers "container(s) publishing port ${PORT}" --filter "publish=${PORT}"
