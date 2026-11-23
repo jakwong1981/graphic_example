@@ -1,0 +1,6 @@
+https://localhost, https://graphic-example-app, https://graphic-example.jackstudio.app {
+	tls internal
+	root * /srv
+	encode zstd gzip
+	file_server
+}

@@ -1,0 +1,25 @@
+services:
+  app:
+    build: .
+    container_name: graphic-example-app
+    ports:
+      - "127.0.0.1:${PORT:-4173}:443"
+    networks:
+      - shared-proxy
+    volumes:
+      - caddy_data:/data
+    healthcheck:
+      test: ["CMD", "wget", "--no-check-certificate", "-q", "-O", "/dev/null", "https://localhost/"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+
+networks:
+  shared-proxy:
+    external: true
+    name: ${EXTERNAL_PROXY_NET:-shared-proxy}
